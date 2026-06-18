@@ -106,7 +106,7 @@
   .coveredit .ctrls{flex:1;}
 
   /* 詳細 */
-  .detail-cover{width:100%; aspect-ratio:1/1; border-radius:18px; background:#000 center/cover no-repeat; margin-bottom:16px; border:1px solid var(--line);}
+  .detail-cover{position:relative; width:100%; aspect-ratio:1/1; border-radius:18px; background:#000 center/cover no-repeat; margin-bottom:16px; border:1px solid var(--line);}
   .detail h2{font-size:21px; margin:0 0 4px;}
   .detail .artist{color:var(--accent); font-weight:600; margin-bottom:16px;}
   .detail .bg{color:#dcdce6; line-height:1.85; font-size:15px; white-space:pre-wrap;}
@@ -132,6 +132,24 @@
   }
   #toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
   .count{font-size:12px; color:var(--sub); margin:0 0 12px 2px;}
+
+  /* ツールバー（検索・並び替え・お気に入り絞り込み） */
+  .toolbar{display:flex; gap:8px; align-items:center; margin-bottom:14px;}
+  .toolbar .search{flex:1; min-width:0; background:var(--bg2); border:1px solid var(--line); color:var(--txt); padding:10px 12px; border-radius:12px; font-size:14px;}
+  .toolbar .search::placeholder{color:var(--sub);}
+  .toolbar .sortsel{background:var(--bg2); border:1px solid var(--line); color:var(--txt); padding:10px 8px; border-radius:12px; font-size:13px; -webkit-appearance:none; appearance:none;}
+  .toolbar .favtoggle{background:var(--card); border:1px solid var(--line); color:var(--sub); width:42px; height:40px; border-radius:12px; font-size:18px; cursor:pointer; flex-shrink:0;}
+  .toolbar .favtoggle.on{color:#ffd24d; border-color:#5a4a1a; background:#2a2410;}
+  .toolbar .favtoggle:active{transform:scale(.94);}
+
+  /* カード上の星ボタン */
+  .favbtn{position:absolute; top:6px; right:6px; width:32px; height:32px; border-radius:50%; border:none;
+    background:rgba(0,0,0,.45); color:rgba(255,255,255,.5); font-size:16px; cursor:pointer; line-height:1;
+    display:flex; align-items:center; justify-content:center; backdrop-filter:blur(2px); padding:0;}
+  .favbtn.on{color:#ffd24d;}
+  .favbtn:active{transform:scale(.88);}
+  #dFav{width:40px; height:40px; font-size:20px; top:10px; right:10px;}
+  .noresult{grid-column:1/-1; text-align:center; color:var(--sub); padding:44px 20px;}
 </style>
 </head>
 <body>
@@ -143,7 +161,18 @@
 <main>
   <div class="addbar">
     <input id="urlInput" type="text" inputmode="url" placeholder="YouTube MusicのURLを貼り付け">
+    <button class="btn ghost" id="btnPaste" title="貼り付け" style="padding:13px 13px;">📋</button>
     <button class="btn" id="btnFetch">調べる</button>
+  </div>
+  <div class="toolbar" id="toolbar" style="display:none">
+    <input id="searchInput" class="search" type="search" placeholder="🔍 曲名・歌手で検索">
+    <select id="sortSel" class="sortsel" aria-label="並び替え">
+      <option value="new">新着順</option>
+      <option value="old">古い順</option>
+      <option value="song">曲名順</option>
+      <option value="artist">歌手順</option>
+    </select>
+    <button class="favtoggle" id="favToggle" title="お気に入りだけ表示">★</button>
   </div>
   <p class="count" id="count"></p>
   <div class="grid" id="grid"></div>
@@ -188,7 +217,7 @@
 <div class="overlay" id="ovDetail">
   <div class="sheet detail">
     <div class="grab"></div>
-    <div class="detail-cover" id="dCover"></div>
+    <div class="detail-cover" id="dCover"><button class="favbtn" id="dFav" title="お気に入り">★</button></div>
     <h2 id="dSong"></h2>
     <div class="artist" id="dArtist"></div>
     <div class="bg" id="dBg"></div>
@@ -347,6 +376,13 @@ async function startFetch(){
   const id = extractVideoId(raw);
   if(!id){ toast("URLから曲を判別できませんでした"); return; }
 
+  const dup = items.find(x=>x.videoId===id);
+  if(dup){
+    if(confirm("この曲はすでに保存済みです。今ある記録を開きますか？\n（キャンセルすると新規としてもう一度追加します）")){
+      $("urlInput").value=""; openDetail(dup.id); return;
+    }
+  }
+
   const btn = $("btnFetch");
   btn.disabled = true; btn.textContent = "調べ中…";
 
@@ -422,20 +458,52 @@ function saveEdit(){
 }
 
 /* ====================== 表示 ====================== */
+let searchText="", sortMode="new", favOnly=false;
+
+function visibleItems(){
+  let list = items.slice();
+  if(favOnly) list = list.filter(x=>x.fav);
+  if(searchText){
+    const q = searchText.toLowerCase();
+    list = list.filter(x =>
+      (x.songTitle||"").toLowerCase().includes(q) ||
+      (x.artist||"").toLowerCase().includes(q) ||
+      (x.background||"").toLowerCase().includes(q));
+  }
+  switch(sortMode){
+    case "old":    list.sort((a,b)=>(a.createdAt||0)-(b.createdAt||0)); break;
+    case "song":   list.sort((a,b)=>(a.songTitle||"").localeCompare(b.songTitle||"","ja")); break;
+    case "artist": list.sort((a,b)=>(a.artist||"").localeCompare(b.artist||"","ja")); break;
+    default:       list.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0)); // 新着
+  }
+  return list;
+}
+
 function render(){
-  const grid=$("grid"), empty=$("empty");
-  if(items.length===0){ grid.innerHTML=""; empty.style.display="block"; $("count").textContent=""; return; }
+  const grid=$("grid"), empty=$("empty"), toolbar=$("toolbar");
+  if(items.length===0){ grid.innerHTML=""; empty.style.display="block"; toolbar.style.display="none"; $("count").textContent=""; return; }
   empty.style.display="none";
-  $("count").textContent = items.length + " 曲";
-  grid.innerHTML = items.map(it=>{
+  toolbar.style.display="flex";
+  const list = visibleItems();
+  $("count").textContent = (list.length===items.length) ? items.length+" 曲" : list.length+" 曲 / 全"+items.length+"曲";
+  if(list.length===0){ grid.innerHTML='<div class="noresult">該当する曲がありません</div>'; return; }
+  grid.innerHTML = list.map(it=>{
     const cov = it.cover && it.cover.value;
     const bg = cov ? `style="background-image:url('${cov.replace(/'/g,"%27")}')"` : "";
     const ph = cov ? "" : '<div class="ph">♪</div>';
     return `<div class="cardx" data-id="${it.id}">
-      <div class="cover" ${bg}>${ph}</div>
+      <div class="cover" ${bg}>${ph}<button class="favbtn ${it.fav?'on':''}" data-fav="${it.id}" aria-label="お気に入り">★</button></div>
       <div class="meta"><p class="t">${esc(it.songTitle||"(無題)")}</p><p class="a">${esc(it.artist||"")}</p></div>
     </div>`;
   }).join("");
+}
+
+function toggleFav(id){
+  const it = items.find(x=>x.id===id); if(!it) return;
+  it.fav = !it.fav;
+  saveItems(items);
+  render();
+  if(detailId===id) $("dFav").classList.toggle("on", !!it.fav);
 }
 
 let detailId=null;
@@ -447,6 +515,7 @@ function openDetail(id){
   $("dArtist").textContent = it.artist || "";
   $("dBg").textContent = it.background || "（背景メモはまだありません）";
   $("dOpen").href = it.url || watchUrl(it.videoId);
+  $("dFav").classList.toggle("on", !!it.fav);
   openOv($("ovDetail"));
 }
 
@@ -543,7 +612,26 @@ $("btnFetch").addEventListener("click", startFetch);
 $("urlInput").addEventListener("keydown", e=>{ if(e.key==="Enter") startFetch(); });
 
 $("grid").addEventListener("click", e=>{
+  const fb=e.target.closest(".favbtn");
+  if(fb){ e.stopPropagation(); toggleFav(fb.dataset.fav); return; }
   const c=e.target.closest(".cardx"); if(c) openDetail(c.dataset.id);
+});
+
+// ツールバー（検索・並び替え・お気に入り絞り込み）
+$("searchInput").addEventListener("input", e=>{ searchText=e.target.value.trim(); render(); });
+$("sortSel").addEventListener("change", e=>{ sortMode=e.target.value; render(); });
+$("favToggle").addEventListener("click", ()=>{ favOnly=!favOnly; $("favToggle").classList.toggle("on", favOnly); render(); });
+
+// 詳細のお気に入りトグル
+$("dFav").addEventListener("click", e=>{ e.stopPropagation(); if(detailId) toggleFav(detailId); });
+
+// URLペースト
+$("btnPaste").addEventListener("click", async ()=>{
+  try{
+    const t = await navigator.clipboard.readText();
+    if(t && t.trim()){ $("urlInput").value=t.trim(); toast("貼り付けました"); $("urlInput").focus(); }
+    else toast("クリップボードが空でした");
+  }catch(e){ toast("貼り付けできません。長押しでペーストしてください"); }
 });
 
 $("btnCancelEdit").addEventListener("click", ()=>{ closeOv($("ovEdit")); editing=null; });
