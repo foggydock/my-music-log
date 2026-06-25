@@ -206,6 +206,7 @@
     <textarea class="f" id="fBg"></textarea>
 
     <div class="status" id="editStatus"></div>
+    <button class="btn ghost" id="btnRetry" style="display:none; width:100%; margin-top:10px; font-size:14px; padding:11px;">🔄 もう一度取得する</button>
     <div class="row">
       <button class="btn ghost" id="btnCancelEdit">キャンセル</button>
       <button class="btn" id="btnSave">保存</button>
@@ -383,20 +384,31 @@ async function startFetch(){
     }
   }
 
-  const btn = $("btnFetch");
-  btn.disabled = true; btn.textContent = "調べ中…";
-
   // まずカバーと下書きを用意して編集シートを開く（取得は後追いで埋める）
   editing = newDraftFromFetch(id, "", "", "");
   openEditSheet("曲の情報", true);
+  await runFetch();
+}
+
+// editing.videoId の情報を取得してフォームに反映する。失敗しても「もう一度取得」で再試行できる。
+async function runFetch(){
+  if(!editing || !editing.videoId){ return; }
+  const btnF=$("btnFetch"), btnR=$("btnRetry");
+  btnF.disabled=true; btnF.textContent="調べ中…";
+  btnR.disabled=true;
   setEditStatus("情報を取得しています…", false, true);
 
-  let rawTitle="", author="";
-  const oe = await fetchOEmbed(id);
-  if(oe){ rawTitle=oe.title; author=oe.author; $("fSong").value=oe.title; $("fArtist").value=oe.author; }
+  // 既に入っている値を土台にしつつ、取れたら新しい情報で上書きする
+  let rawTitle = $("fSong").value.trim();
+  let author   = $("fArtist").value.trim();
+  const oe = await fetchOEmbed(editing.videoId);
+  if(oe){
+    if(oe.title){  rawTitle=oe.title;  if(!$("fSong").value.trim())   $("fSong").value=oe.title; }
+    if(oe.author){ author=oe.author;   if(!$("fArtist").value.trim()) $("fArtist").value=oe.author; }
+  }
 
   if(!getKey()){
-    setEditStatus("⚠ Geminiキー未設定。曲名・歌手は上の値（または手入力）で保存できます。背景はキー設定後に。", true);
+    setEditStatus("⚠ Geminiキー未設定。曲名・歌手は上の値（または手入力）で保存できます。背景はキー設定後に「もう一度取得」を。", true);
   }else{
     try{
       const g = await askGemini(rawTitle, author);
@@ -405,12 +417,13 @@ async function startFetch(){
       if(g.background) $("fBg").value = g.background;
       setEditStatus("取得しました。内容を確認して保存してください。", false);
     }catch(err){
-      if(err.message==="BAD_KEY") setEditStatus("⚠ Geminiキーが無効のようです。設定を確認してください。", true);
+      if(err.message==="BAD_KEY") setEditStatus("⚠ Geminiキーが無効のようです。設定を確認して「もう一度取得」を押してください。", true);
       else if(err.message==="NO_KEY") setEditStatus("⚠ Geminiキー未設定です。", true);
-      else setEditStatus("⚠ 背景の自動生成に失敗（"+err.message+"）。曲名・歌手は手入力で保存できます。", true);
+      else setEditStatus("⚠ 取得に失敗しました（"+err.message+"）。「もう一度取得」で再試行できます。", true);
     }
   }
-  btn.disabled=false; btn.textContent="調べる";
+  btnF.disabled=false; btnF.textContent="調べる";
+  btnR.disabled=false;
 }
 
 function setEditStatus(msg, isErr, loading){
@@ -425,6 +438,7 @@ function openEditSheet(title, isNew){
   $("fSong").value   = editing.songTitle || "";
   $("fArtist").value = editing.artist || "";
   $("fBg").value     = editing.background || "";
+  $("btnRetry").style.display = editing.videoId ? "block" : "none";
   if(isNew) setEditStatus("", false);
   openOv($("ovEdit"));
 }
@@ -636,6 +650,7 @@ $("btnPaste").addEventListener("click", async ()=>{
 
 $("btnCancelEdit").addEventListener("click", ()=>{ closeOv($("ovEdit")); editing=null; });
 $("btnSave").addEventListener("click", saveEdit);
+$("btnRetry").addEventListener("click", runFetch);
 
 $("btnPickImg").addEventListener("click", ()=> $("fileImg").click());
 $("fileImg").addEventListener("change", e=>{
