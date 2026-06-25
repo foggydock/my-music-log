@@ -192,8 +192,9 @@
     <div class="coveredit">
       <div class="prev" id="prevCover"></div>
       <div class="ctrls">
-        <button class="btn ghost" id="btnPickImg" style="width:100%; font-size:13px; padding:10px;">📷 スクショから選ぶ</button>
-        <button class="btn ghost" id="btnUseThumb" style="width:100%; font-size:13px; padding:10px; margin-top:8px;">↩ 自動カバーに戻す</button>
+        <button class="btn ghost" id="btnJacket" style="width:100%; font-size:13px; padding:10px;">🎵 ジャケットを探す</button>
+        <button class="btn ghost" id="btnPickImg" style="width:100%; font-size:13px; padding:10px; margin-top:8px;">📷 スクショから選ぶ</button>
+        <button class="btn ghost" id="btnUseThumb" style="width:100%; font-size:13px; padding:10px; margin-top:8px;">↩ 動画サムネに戻す</button>
       </div>
     </div>
     <input type="file" id="fileImg" accept="image/*" style="display:none">
@@ -323,6 +324,39 @@ async function fetchOEmbed(id){
   return null;
 }
 
+// iTunes 検索（JSONP方式でCORSを回避）。曲名＋歌手から正方形ジャケットを探す。
+function itunesSearch(term){
+  return new Promise(resolve=>{
+    const cb = "__it_" + Math.random().toString(36).slice(2);
+    const s = document.createElement("script");
+    const timer = setTimeout(()=>{ cleanup(); resolve(null); }, 8000);
+    function cleanup(){ clearTimeout(timer); try{ delete window[cb]; }catch(e){} if(s.parentNode) s.parentNode.removeChild(s); }
+    window[cb] = data => { cleanup(); resolve(data); };
+    const p = new URLSearchParams({ term, entity:"song", limit:"6", country:"JP", callback:cb });
+    s.src = "https://itunes.apple.com/search?" + p.toString();
+    s.onerror = ()=>{ cleanup(); resolve(null); };
+    document.head.appendChild(s);
+  });
+}
+function pickBestTrack(results, song){
+  const q = (song||"").toLowerCase().trim();
+  return results.find(r => (r.trackName||"").toLowerCase()===q)
+      || results.find(r => { const n=(r.trackName||"").toLowerCase(); return q && (n.includes(q)||q.includes(n)); })
+      || results[0];
+}
+// 曲名＋歌手から { artwork, album, year } を返す。見つからなければ null。
+async function fetchJacket(song, artist){
+  const term = ((artist? artist+" ":"") + (song||"")).trim();
+  if(!term) return null;
+  const data = await itunesSearch(term);
+  if(!data || !data.results || !data.results.length) return null;
+  const r = pickBestTrack(data.results, song);
+  let art = r.artworkUrl100 || r.artworkUrl60 || "";
+  if(!art) return null;
+  art = art.replace(/\/\d+x\d+bb\.(jpg|png)$/i, "/600x600bb.$1"); // 高解像度に差し替え
+  return { artwork:art, album:r.collectionName||"", year:(r.releaseDate||"").slice(0,4) };
+}
+
 // Gemini で曲名・歌手・背景を整える
 async function askGemini(rawTitle, author){
   const key = getKey();
@@ -422,8 +456,22 @@ async function runFetch(){
       else setEditStatus("⚠ 取得に失敗しました（"+err.message+"）。「もう一度取得」で再試行できます。", true);
     }
   }
+  await tryAutoJacket();
   btnF.disabled=false; btnF.textContent="調べる";
   btnR.disabled=false;
+}
+
+// 曲名・歌手から正方形ジャケットを自動セット（ユーザーが切り抜いた画像があれば尊重して上書きしない）
+async function tryAutoJacket(){
+  if(!editing) return;
+  if(editing.cover && editing.cover.type==="image") return;
+  const song=$("fSong").value.trim(), artist=$("fArtist").value.trim();
+  if(!song) return;
+  const j = await fetchJacket(song, artist);
+  if(j && j.artwork){
+    editing.cover = { type:"itunes", value:j.artwork };
+    renderCoverPrev();
+  }
 }
 
 function setEditStatus(msg, isErr, loading){
@@ -662,6 +710,16 @@ $("fileImg").addEventListener("change", e=>{
 });
 $("btnUseThumb").addEventListener("click", ()=>{
   if(editing && editing.videoId){ editing.cover={type:"thumb", value:thumbUrl(editing.videoId,false)}; renderCoverPrev(); }
+});
+$("btnJacket").addEventListener("click", async ()=>{
+  const song=$("fSong").value.trim(), artist=$("fArtist").value.trim();
+  if(!song){ toast("先に曲名を入れてください"); return; }
+  const btn=$("btnJacket"), old=btn.textContent;
+  btn.disabled=true; btn.textContent="探し中…";
+  const j = await fetchJacket(song, artist);
+  btn.disabled=false; btn.textContent=old;
+  if(j && j.artwork){ editing.cover={type:"itunes", value:j.artwork}; renderCoverPrev(); toast("ジャケットを設定しました"); }
+  else toast("ジャケットが見つかりませんでした");
 });
 
 $("btnCropCancel").addEventListener("click", ()=> closeOv($("ovCrop")));
