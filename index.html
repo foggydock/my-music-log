@@ -195,6 +195,7 @@
         <button class="btn ghost" id="btnJacket" style="width:100%; font-size:13px; padding:10px;">🎵 ジャケットを探す</button>
         <button class="btn ghost" id="btnPickImg" style="width:100%; font-size:13px; padding:10px; margin-top:8px;">📷 スクショから選ぶ</button>
         <button class="btn ghost" id="btnUseThumb" style="width:100%; font-size:13px; padding:10px; margin-top:8px;">↩ 動画サムネに戻す</button>
+        <button class="btn ghost" id="btnPasteImgUrl" style="width:100%; font-size:13px; padding:10px; margin-top:8px;">🔗 画像URLを貼る</button>
       </div>
     </div>
     <input type="file" id="fileImg" accept="image/*" style="display:none">
@@ -400,6 +401,7 @@ async function askGemini(rawTitle, author){
 
 /* ====================== 編集状態 ====================== */
 let editing = null; // 編集中の作業オブジェクト
+let fetchToken = 0; // 編集シートを閉じた後に古いfetchが結果を上書きしないようにする
 
 function newDraftFromFetch(id, song, artist, bg){
   return { id:null, videoId:id, url:watchUrl(id), songTitle:song||"", artist:artist||"", background:bg||"",
@@ -427,6 +429,7 @@ async function startFetch(){
 // editing.videoId の情報を取得してフォームに反映する。失敗しても「もう一度取得」で再試行できる。
 async function runFetch(){
   if(!editing || !editing.videoId){ return; }
+  const myToken = ++fetchToken; // このfetch実行中に編集シートが閉じられたり別の曲に切り替わったりしたら結果を捨てる
   const btnF=$("btnFetch"), btnR=$("btnRetry");
   btnF.disabled=true; btnF.textContent="調べ中…";
   btnR.disabled=true;
@@ -436,6 +439,7 @@ async function runFetch(){
   let rawTitle = $("fSong").value.trim();
   let author   = $("fArtist").value.trim();
   const oe = await fetchOEmbed(editing.videoId);
+  if(myToken!==fetchToken) return;
   if(oe){
     if(oe.title){  rawTitle=oe.title;  if(!$("fSong").value.trim())   $("fSong").value=oe.title; }
     if(oe.author){ author=oe.author;   if(!$("fArtist").value.trim()) $("fArtist").value=oe.author; }
@@ -446,17 +450,21 @@ async function runFetch(){
   }else{
     try{
       const g = await askGemini(rawTitle, author);
+      if(myToken!==fetchToken) return;
       if(g.songTitle) $("fSong").value = g.songTitle;
       if(g.artist) $("fArtist").value = g.artist;
       if(g.background) $("fBg").value = g.background;
       setEditStatus("取得しました。内容を確認して保存してください。", false);
     }catch(err){
+      if(myToken!==fetchToken) return;
       if(err.message==="BAD_KEY") setEditStatus("⚠ Geminiキーが無効のようです。設定を確認して「もう一度取得」を押してください。", true);
       else if(err.message==="NO_KEY") setEditStatus("⚠ Geminiキー未設定です。", true);
       else setEditStatus("⚠ 取得に失敗しました（"+err.message+"）。「もう一度取得」で再試行できます。", true);
     }
   }
+  if(myToken!==fetchToken) return;
   await tryAutoJacket();
+  if(myToken!==fetchToken) return;
   btnF.disabled=false; btnF.textContent="調べる";
   btnR.disabled=false;
 }
@@ -513,6 +521,7 @@ function saveEdit(){
   }
   saveItems(items);
   render();
+  fetchToken++;
   closeOv($("ovEdit"));
   $("urlInput").value="";
   toast("保存しました ♪");
@@ -696,7 +705,7 @@ $("btnPaste").addEventListener("click", async ()=>{
   }catch(e){ toast("貼り付けできません。長押しでペーストしてください"); }
 });
 
-$("btnCancelEdit").addEventListener("click", ()=>{ closeOv($("ovEdit")); editing=null; });
+$("btnCancelEdit").addEventListener("click", ()=>{ fetchToken++; closeOv($("ovEdit")); editing=null; });
 $("btnSave").addEventListener("click", saveEdit);
 $("btnRetry").addEventListener("click", runFetch);
 
@@ -710,6 +719,15 @@ $("fileImg").addEventListener("change", e=>{
 });
 $("btnUseThumb").addEventListener("click", ()=>{
   if(editing && editing.videoId){ editing.cover={type:"thumb", value:thumbUrl(editing.videoId,false)}; renderCoverPrev(); }
+});
+$("btnPasteImgUrl").addEventListener("click", ()=>{
+  const url = prompt("画像のURLを貼り付けてください");
+  if(!url) return;
+  const u = url.trim();
+  if(!/^https?:\/\//i.test(u)){ toast("http(s)から始まるURLを入れてください"); return; }
+  editing.cover = { type:"image", value:u };
+  renderCoverPrev();
+  toast("画像を設定しました");
 });
 $("btnJacket").addEventListener("click", async ()=>{
   const song=$("fSong").value.trim(), artist=$("fArtist").value.trim();
