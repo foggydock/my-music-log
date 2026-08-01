@@ -111,6 +111,8 @@
   .detail .artist{color:var(--accent); font-weight:600; margin-bottom:16px;}
   .detail .bg{color:#dcdce6; line-height:1.85; font-size:15px; white-space:pre-wrap;}
   .detail .openlink{display:flex; align-items:center; justify-content:center; gap:8px; margin-top:18px; text-decoration:none;}
+  .urlrow{display:flex; align-items:center; gap:8px; margin-top:10px;}
+  .urltext{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; color:var(--sub); background:var(--line); padding:8px 10px; border-radius:8px;}
 
   /* 切り抜き */
   .cropwrap{position:relative; width:100%; margin:10px 0; background:#000; border-radius:12px; overflow:hidden; touch-action:none;}
@@ -225,6 +227,10 @@
     <div class="artist" id="dArtist"></div>
     <div class="bg" id="dBg"></div>
     <a class="btn openlink" id="dOpen" target="_blank" rel="noopener">▶ YouTube Musicで開く</a>
+    <div class="urlrow">
+      <span class="urltext" id="dUrl"></span>
+      <button class="btn ghost" id="btnCopyUrl" style="flex:none; padding:8px 12px; font-size:12px;">📋 コピー</button>
+    </div>
     <div class="row">
       <button class="btn ghost" id="btnEditFromDetail">編集</button>
       <button class="btn danger" id="btnDelete">削除</button>
@@ -585,7 +591,9 @@ function openDetail(id){
   $("dSong").textContent = it.songTitle || "(無題)";
   $("dArtist").textContent = it.artist || "";
   $("dBg").textContent = it.background || "（背景メモはまだありません）";
-  $("dOpen").href = it.url || watchUrl(it.videoId);
+  const durl = it.url || watchUrl(it.videoId);
+  $("dOpen").href = durl;
+  $("dUrl").textContent = durl;
   $("dFav").classList.toggle("on", !!it.fav);
   openOv($("ovDetail"));
 }
@@ -743,6 +751,16 @@ $("btnJacket").addEventListener("click", async ()=>{
 $("btnCropCancel").addEventListener("click", ()=> closeOv($("ovCrop")));
 $("btnCropOk").addEventListener("click", doCrop);
 
+$("btnCopyUrl").addEventListener("click", async ()=>{
+  const url = $("dUrl").textContent;
+  if(!url) return;
+  try{
+    await navigator.clipboard.writeText(url);
+    toast("URLをコピーしました");
+  }catch(e){
+    toast("コピーに失敗しました");
+  }
+});
 $("btnCloseDetail").addEventListener("click", ()=> closeOv($("ovDetail")));
 $("btnEditFromDetail").addEventListener("click", ()=>{
   const it=items.find(x=>x.id===detailId); if(!it) return;
