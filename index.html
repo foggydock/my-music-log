@@ -290,7 +290,15 @@ const LS_KEY   = "musiclog.geminiKey.v1";
 const GEMINI_MODEL = "gemini-2.5-flash";
 
 function loadItems(){ try{ return JSON.parse(localStorage.getItem(LS_ITEMS)) || []; }catch(e){ return []; } }
-function saveItems(items){ localStorage.setItem(LS_ITEMS, JSON.stringify(items)); }
+function saveItems(items){
+  try{
+    localStorage.setItem(LS_ITEMS, JSON.stringify(items));
+    return true;
+  }catch(e){
+    toast("⚠ 保存できませんでした（容量がいっぱいの可能性）。設定からJSON書き出しでバックアップし、古い曲や画像を減らしてください");
+    return false;
+  }
+}
 function getKey(){ return localStorage.getItem(LS_KEY) || ""; }
 function setKey(k){ localStorage.setItem(LS_KEY, k); }
 
@@ -525,12 +533,12 @@ function saveEdit(){
     editing.createdAt = Date.now();
     items.unshift(editing);
   }
-  saveItems(items);
+  const ok = saveItems(items);
   render();
   fetchToken++;
   closeOv($("ovEdit"));
   $("urlInput").value="";
-  toast("保存しました ♪");
+  if(ok) toast("保存しました ♪");
   editing=null;
 }
 
@@ -679,7 +687,7 @@ function importData(file){
       const arr=JSON.parse(r.result);
       if(!Array.isArray(arr)) throw 0;
       if(!confirm("読み込むと現在の "+items.length+" 曲を、ファイルの "+arr.length+" 曲で置き換えます。よろしいですか？")) return;
-      items=arr; saveItems(items); render(); toast("読み込みました");
+      items=arr; const ok=saveItems(items); render(); if(ok) toast("読み込みました");
       closeOv($("ovSettings"));
     }catch(e){ toast("ファイルを読み込めませんでした"); }
   };
