@@ -14,7 +14,6 @@
   :root{
     --bg:#0d0d12; --bg2:#16161f; --card:#1c1c28; --line:#2a2a3a;
     --txt:#f2f2f7; --sub:#9a9ab0; --accent:#ff4d6d; --accent2:#7c5cff;
-    --ok:#34d399; --warn:#fbbf24;
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
   html,body{margin:0; padding:0;}
@@ -308,23 +307,40 @@ let items = loadItems();
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove("show"),1900); }
 function esc(s){ return (s||"").replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+// カバー画像URLを要素の style に直接あてる（プレビュー・詳細用）
+function applyCoverBg(el, cov){
+  const u = cov && cov.value;
+  el.style.backgroundImage = u ? `url("${u}")` : "none";
+}
+// カバー画像URLをHTML文字列の style="" 属性として埋め込む（一覧カード用）。
+// esc() で "<>& を無害化した上で ' も潰すことで、url('...') の外に出て属性を壊す/注入することを防ぐ。
+function coverBgAttr(cov){
+  const u = cov && cov.value;
+  if(!u) return "";
+  return `style="background-image:url('${esc(u).replace(/'/g,"%27")}')"`;
+}
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 function openOv(el){ el.classList.add("open"); }
 function closeOv(el){ el.classList.remove("open"); }
 
+function isYouTubeHost(h){
+  h = (h||"").toLowerCase();
+  return h==="youtube.com" || h.endsWith(".youtube.com") || h==="youtu.be" || h.endsWith(".youtu.be");
+}
 function extractVideoId(url){
   if(!url) return null;
   url = url.trim();
   try{
     const u = new URL(url);
-    if(u.hostname.includes("youtu.be")) return u.pathname.slice(1).split(/[/?#]/)[0] || null;
+    if(!isYouTubeHost(u.hostname)) return null;
+    if(u.hostname.endsWith("youtu.be")) return u.pathname.slice(1).split(/[/?#]/)[0] || null;
     const v = u.searchParams.get("v");
-    if(v) return v;
+    return (v && /^[\w-]{11}$/.test(v)) ? v : null;
   }catch(e){}
-  const m = url.match(/[?&]v=([\w-]{11})/) || url.match(/youtu\.be\/([\w-]{11})/) || url.match(/([\w-]{11})/);
+  const m = url.match(/(?:youtube\.com\/watch\?[^#]*[?&]v=|youtu\.be\/)([\w-]{11})/);
   return m ? m[1] : null;
 }
-function thumbUrl(id, hi){ return `https://i.ytimg.com/vi/${id}/${hi?"maxresdefault":"hqdefault"}.jpg`; }
+function thumbUrl(id){ return `https://i.ytimg.com/vi/${id}/hqdefault.jpg`; }
 function watchUrl(id){ return `https://music.youtube.com/watch?v=${id}`; }
 
 /* ====================== 外部取得 ====================== */
@@ -345,7 +361,7 @@ function itunesSearch(term){
     const cb = "__it_" + Math.random().toString(36).slice(2);
     const s = document.createElement("script");
     const timer = setTimeout(()=>{ cleanup(); resolve(null); }, 8000);
-    function cleanup(){ clearTimeout(timer); try{ delete window[cb]; }catch(e){} if(s.parentNode) s.parentNode.removeChild(s); }
+    function cleanup(){ clearTimeout(timer); window[cb]=function(){}; if(s.parentNode) s.parentNode.removeChild(s); }
     window[cb] = data => { cleanup(); resolve(data); };
     const p = new URLSearchParams({ term, entity:"song", limit:"6", country:"JP", callback:cb });
     s.src = "https://itunes.apple.com/search?" + p.toString();
@@ -353,23 +369,26 @@ function itunesSearch(term){
     document.head.appendChild(s);
   });
 }
+// タイトルが曲名と一致・部分一致するものだけを候補にする。無関係な1件目を誤爆させないため results[0] にはフォールバックしない。
 function pickBestTrack(results, song){
   const q = (song||"").toLowerCase().trim();
+  if(!q) return null;
   return results.find(r => (r.trackName||"").toLowerCase()===q)
-      || results.find(r => { const n=(r.trackName||"").toLowerCase(); return q && (n.includes(q)||q.includes(n)); })
-      || results[0];
+      || results.find(r => { const n=(r.trackName||"").toLowerCase(); return n.includes(q)||q.includes(n); })
+      || null;
 }
-// 曲名＋歌手から { artwork, album, year } を返す。見つからなければ null。
+// 曲名＋歌手から { artwork } を返す。見つからなければ null。
 async function fetchJacket(song, artist){
   const term = ((artist? artist+" ":"") + (song||"")).trim();
   if(!term) return null;
   const data = await itunesSearch(term);
   if(!data || !data.results || !data.results.length) return null;
   const r = pickBestTrack(data.results, song);
+  if(!r) return null;
   let art = r.artworkUrl100 || r.artworkUrl60 || "";
   if(!art) return null;
   art = art.replace(/\/\d+x\d+bb\.(jpg|png)$/i, "/600x600bb.$1"); // 高解像度に差し替え
-  return { artwork:art, album:r.collectionName||"", year:(r.releaseDate||"").slice(0,4) };
+  return { artwork:art };
 }
 
 // Gemini で曲名・歌手・背景を整える
@@ -419,7 +438,7 @@ let fetchToken = 0; // 編集シートを閉じた後に古いfetchが結果を�
 
 function newDraftFromFetch(id, song, artist, bg){
   return { id:null, videoId:id, url:watchUrl(id), songTitle:song||"", artist:artist||"", background:bg||"",
-           cover:{ type:"thumb", value:thumbUrl(id,false) }, createdAt:null };
+           cover:{ type:"thumb", value:thumbUrl(id) }, createdAt:null };
 }
 
 async function startFetch(){
@@ -436,7 +455,7 @@ async function startFetch(){
 
   // まずカバーと下書きを用意して編集シートを開く（取得は後追いで埋める）
   editing = newDraftFromFetch(id, "", "", "");
-  openEditSheet("曲の情報", true);
+  openEditSheet("曲の情報");
   await runFetch();
 }
 
@@ -449,38 +468,41 @@ async function runFetch(){
   btnR.disabled=true;
   setEditStatus("情報を取得しています…", false, true);
 
-  // 既に入っている値を土台にしつつ、取れたら新しい情報で上書きする
-  let rawTitle = $("fSong").value.trim();
-  let author   = $("fArtist").value.trim();
-  const oe = await fetchOEmbed(editing.videoId);
-  if(myToken!==fetchToken) return;
-  if(oe){
-    if(oe.title){  rawTitle=oe.title;  if(!$("fSong").value.trim())   $("fSong").value=oe.title; }
-    if(oe.author){ author=oe.author;   if(!$("fArtist").value.trim()) $("fArtist").value=oe.author; }
-  }
-
-  if(!getKey()){
-    setEditStatus("⚠ Geminiキー未設定。曲名・歌手は上の値（または手入力）で保存できます。背景はキー設定後に「もう一度取得」を。", true);
-  }else{
-    try{
-      const g = await askGemini(rawTitle, author);
-      if(myToken!==fetchToken) return;
-      if(g.songTitle) $("fSong").value = g.songTitle;
-      if(g.artist) $("fArtist").value = g.artist;
-      if(g.background) $("fBg").value = g.background;
-      setEditStatus("取得しました。内容を確認して保存してください。", false);
-    }catch(err){
-      if(myToken!==fetchToken) return;
-      if(err.message==="BAD_KEY") setEditStatus("⚠ Geminiキーが無効のようです。設定を確認して「もう一度取得」を押してください。", true);
-      else if(err.message==="NO_KEY") setEditStatus("⚠ Geminiキー未設定です。", true);
-      else setEditStatus("⚠ 取得に失敗しました（"+err.message+"）。「もう一度取得」で再試行できます。", true);
+  try{
+    // 既に入っている値を土台にしつつ、取れたら新しい情報で上書きする
+    let rawTitle = $("fSong").value.trim();
+    let author   = $("fArtist").value.trim();
+    const oe = await fetchOEmbed(editing.videoId);
+    if(myToken!==fetchToken) return;
+    if(oe){
+      if(oe.title){  rawTitle=oe.title;  if(!$("fSong").value.trim())   $("fSong").value=oe.title; }
+      if(oe.author){ author=oe.author;   if(!$("fArtist").value.trim()) $("fArtist").value=oe.author; }
     }
+
+    if(!getKey()){
+      setEditStatus("⚠ Geminiキー未設定。曲名・歌手は上の値（または手入力）で保存できます。背景はキー設定後に「もう一度取得」を。", true);
+    }else{
+      try{
+        const g = await askGemini(rawTitle, author);
+        if(myToken!==fetchToken) return;
+        if(g.songTitle) $("fSong").value = g.songTitle;
+        if(g.artist) $("fArtist").value = g.artist;
+        if(g.background) $("fBg").value = g.background;
+        setEditStatus("取得しました。内容を確認して保存してください。", false);
+      }catch(err){
+        if(myToken!==fetchToken) return;
+        if(err.message==="BAD_KEY") setEditStatus("⚠ Geminiキーが無効のようです。設定を確認して「もう一度取得」を押してください。", true);
+        else if(err.message==="NO_KEY") setEditStatus("⚠ Geminiキー未設定です。", true);
+        else setEditStatus("⚠ 取得に失敗しました（"+err.message+"）。「もう一度取得」で再試行できます。", true);
+      }
+    }
+    if(myToken!==fetchToken) return;
+    await tryAutoJacket();
+  }finally{
+    // btnFetch は編集シートの外（追加バー）にあるボタンなので、途中でキャンセル/保存されても必ず元に戻す
+    btnF.disabled=false; btnF.textContent="調べる";
+    btnR.disabled=false;
   }
-  if(myToken!==fetchToken) return;
-  await tryAutoJacket();
-  if(myToken!==fetchToken) return;
-  btnF.disabled=false; btnF.textContent="調べる";
-  btnR.disabled=false;
 }
 
 // 曲名・歌手から正方形ジャケットを自動セット（ユーザーが切り抜いた画像があれば尊重して上書きしない）
@@ -490,10 +512,8 @@ async function tryAutoJacket(){
   const song=$("fSong").value.trim(), artist=$("fArtist").value.trim();
   if(!song) return;
   const j = await fetchJacket(song, artist);
-  if(j && j.artwork){
-    editing.cover = { type:"itunes", value:j.artwork };
-    renderCoverPrev();
-  }
+  if(!editing) return; // 取得中にシートが閉じられた
+  if(j && j.artwork) setCover("itunes", j.artwork);
 }
 
 function setEditStatus(msg, isErr, loading){
@@ -502,21 +522,25 @@ function setEditStatus(msg, isErr, loading){
   el.innerHTML = (loading?'<span class="spinner"></span>':'') + esc(msg);
 }
 
-function openEditSheet(title, isNew){
+function openEditSheet(title){
   $("editTitle").textContent = title;
   renderCoverPrev();
   $("fSong").value   = editing.songTitle || "";
   $("fArtist").value = editing.artist || "";
   $("fBg").value     = editing.background || "";
   $("btnRetry").style.display = editing.videoId ? "block" : "none";
-  if(isNew) setEditStatus("", false);
+  setEditStatus("", false);
   openOv($("ovEdit"));
 }
 
 function renderCoverPrev(){
-  const p=$("prevCover");
-  const c=editing.cover;
-  p.style.backgroundImage = c && c.value ? `url("${c.value}")` : "none";
+  applyCoverBg($("prevCover"), editing.cover);
+}
+// editing が編集シートを閉じた後で null になっていることがある（非同期のジャケット取得中など）ので安全側でno-op
+function setCover(type, value){
+  if(!editing) return;
+  editing.cover = { type, value };
+  renderCoverPrev();
 }
 
 function saveEdit(){
@@ -525,6 +549,8 @@ function saveEdit(){
   editing.songTitle = song;
   editing.artist = $("fArtist").value.trim();
   editing.background = $("fBg").value.trim();
+
+  const prevItems = items.slice(); // 保存に失敗したら元に戻すためのスナップショット
   if(editing.id){
     const i = items.findIndex(x=>x.id===editing.id);
     if(i>=0) items[i] = editing;
@@ -533,12 +559,16 @@ function saveEdit(){
     editing.createdAt = Date.now();
     items.unshift(editing);
   }
-  const ok = saveItems(items);
+  if(!saveItems(items)){
+    items = prevItems; // 保存できなかったので画面上もなかったことにする（シートは開いたまま再試行できる）
+    render();
+    return;
+  }
   render();
   fetchToken++;
   closeOv($("ovEdit"));
   $("urlInput").value="";
-  if(ok) toast("保存しました ♪");
+  toast("保存しました ♪");
   editing=null;
 }
 
@@ -573,11 +603,11 @@ function render(){
   $("count").textContent = (list.length===items.length) ? items.length+" 曲" : list.length+" 曲 / 全"+items.length+"曲";
   if(list.length===0){ grid.innerHTML='<div class="noresult">該当する曲がありません</div>'; return; }
   grid.innerHTML = list.map(it=>{
-    const cov = it.cover && it.cover.value;
-    const bg = cov ? `style="background-image:url('${cov.replace(/'/g,"%27")}')"` : "";
-    const ph = cov ? "" : '<div class="ph">♪</div>';
-    return `<div class="cardx" data-id="${it.id}">
-      <div class="cover" ${bg}>${ph}<button class="favbtn ${it.fav?'on':''}" data-fav="${it.id}" aria-label="お気に入り">★</button></div>
+    const bg = coverBgAttr(it.cover);
+    const ph = bg ? "" : '<div class="ph">♪</div>';
+    const id = esc(it.id);
+    return `<div class="cardx" data-id="${id}">
+      <div class="cover" ${bg}>${ph}<button class="favbtn ${it.fav?'on':''}" data-fav="${id}" aria-label="お気に入り">★</button></div>
       <div class="meta"><p class="t">${esc(it.songTitle||"(無題)")}</p><p class="a">${esc(it.artist||"")}</p></div>
     </div>`;
   }).join("");
@@ -586,7 +616,7 @@ function render(){
 function toggleFav(id){
   const it = items.find(x=>x.id===id); if(!it) return;
   it.fav = !it.fav;
-  saveItems(items);
+  if(!saveItems(items)){ it.fav = !it.fav; return; } // 保存できなければ画面上も元に戻す
   render();
   if(detailId===id) $("dFav").classList.toggle("on", !!it.fav);
 }
@@ -595,7 +625,7 @@ let detailId=null;
 function openDetail(id){
   const it=items.find(x=>x.id===id); if(!it) return;
   detailId=id;
-  $("dCover").style.backgroundImage = it.cover&&it.cover.value ? `url("${it.cover.value}")` : "none";
+  applyCoverBg($("dCover"), it.cover);
   $("dSong").textContent = it.songTitle || "(無題)";
   $("dArtist").textContent = it.artist || "";
   $("dBg").textContent = it.background || "（背景メモはまだありません）";
@@ -610,14 +640,13 @@ function openDetail(id){
 let cropState=null;
 function openCrop(dataUrl){
   const img=$("cropImg");
+  openOv($("ovCrop")); // 先に表示してから寸法を測る（非表示のままだと clientWidth が 0 になり枠が潰れる）
   img.onload=()=>{
     const wrap=$("cropwrap");
     const w=wrap.clientWidth, h=img.clientHeight;
     const side=Math.min(w,h)*0.8;
-    const box=$("cropbox");
     cropState={ w, h, side, x:(w-side)/2, y:(h-side)/2 };
     applyBox();
-    openOv($("ovCrop"));
   };
   img.src=dataUrl;
 }
@@ -631,29 +660,27 @@ function clampBox(){
   s.x=Math.max(0, Math.min(s.x, s.w-s.side));
   s.y=Math.max(0, Math.min(s.y, s.h-s.side));
 }
-function pointer(e){ const t=e.touches?e.touches[0]:e; return {x:t.clientX, y:t.clientY}; }
-
 function setupCropDrag(){
   const box=$("cropbox"), handle=$("cropHandle");
   let mode=null, start=null, orig=null;
-  function down(m){ return e=>{ e.preventDefault(); mode=m; start=pointer(e); orig={...cropState}; }; }
+  function down(m){ return e=>{
+    e.preventDefault(); mode=m; start={x:e.clientX,y:e.clientY}; orig={...cropState};
+    if(box.setPointerCapture) box.setPointerCapture(e.pointerId);
+  }; }
   function move(e){
     if(!mode) return;
     e.preventDefault();
-    const p=pointer(e), dx=p.x-start.x, dy=p.y-start.y;
+    const dx=e.clientX-start.x, dy=e.clientY-start.y;
     if(mode==="move"){ cropState.x=orig.x+dx; cropState.y=orig.y+dy; }
     else { cropState.side=orig.side+Math.max(dx,dy); }
     clampBox(); applyBox();
   }
   function up(){ mode=null; }
-  box.addEventListener("mousedown", down("move"));
-  box.addEventListener("touchstart", down("move"), {passive:false});
-  handle.addEventListener("mousedown", e=>{e.stopPropagation(); down("size")(e);});
-  handle.addEventListener("touchstart", e=>{e.stopPropagation(); down("size")(e);}, {passive:false});
-  window.addEventListener("mousemove", move);
-  window.addEventListener("touchmove", move, {passive:false});
-  window.addEventListener("mouseup", up);
-  window.addEventListener("touchend", up);
+  box.addEventListener("pointerdown", down("move"));
+  handle.addEventListener("pointerdown", e=>{ e.stopPropagation(); down("size")(e); });
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
+  window.addEventListener("pointercancel", up);
 }
 
 function doCrop(){
@@ -665,8 +692,7 @@ function doCrop(){
   const ctx=cv.getContext("2d");
   ctx.drawImage(img, sx, sy, ss, ss, 0, 0, out, out);
   const data=cv.toDataURL("image/jpeg", 0.82);
-  editing.cover={ type:"image", value:data };
-  renderCoverPrev();
+  setCover("image", data);
   closeOv($("ovCrop"));
   toast("カバーを設定しました");
 }
@@ -683,13 +709,25 @@ function exportData(){
 function importData(file){
   const r=new FileReader();
   r.onload=()=>{
-    try{
-      const arr=JSON.parse(r.result);
-      if(!Array.isArray(arr)) throw 0;
-      if(!confirm("読み込むと現在の "+items.length+" 曲を、ファイルの "+arr.length+" 曲で置き換えます。よろしいですか？")) return;
-      items=arr; const ok=saveItems(items); render(); if(ok) toast("読み込みました");
-      closeOv($("ovSettings"));
-    }catch(e){ toast("ファイルを読み込めませんでした"); }
+    let arr;
+    try{ arr=JSON.parse(r.result); }
+    catch(e){ toast("ファイルを読み込めませんでした（JSONとして壊れています）"); return; }
+    // このアプリの書き出し形式（{videoId, songTitle, ...} の配列）かどうかを確認してから置き換える
+    if(!Array.isArray(arr) || !arr.every(x=>x && typeof x==="object" && typeof x.videoId==="string")){
+      toast("このアプリの書き出しファイルではないようです");
+      return;
+    }
+    if(!confirm("読み込むと現在の "+items.length+" 曲を、ファイルの "+arr.length+" 曲で置き換えます。よろしいですか？")) return;
+    const prevItems = items;
+    items = arr;
+    if(!saveItems(items)){
+      items = prevItems; // 保存できなかったので置き換えを取り消す
+      render();
+      return;
+    }
+    render();
+    toast("読み込みました");
+    closeOv($("ovSettings"));
   };
   r.readAsText(file);
 }
@@ -705,7 +743,12 @@ $("grid").addEventListener("click", e=>{
 });
 
 // ツールバー（検索・並び替え・お気に入り絞り込み）
-$("searchInput").addEventListener("input", e=>{ searchText=e.target.value.trim(); render(); });
+let searchDebounce=null;
+$("searchInput").addEventListener("input", e=>{
+  clearTimeout(searchDebounce);
+  const v=e.target.value.trim();
+  searchDebounce=setTimeout(()=>{ searchText=v; render(); }, 150);
+});
 $("sortSel").addEventListener("change", e=>{ sortMode=e.target.value; render(); });
 $("favToggle").addEventListener("click", ()=>{ favOnly=!favOnly; $("favToggle").classList.toggle("on", favOnly); render(); });
 
@@ -734,15 +777,14 @@ $("fileImg").addEventListener("change", e=>{
   e.target.value="";
 });
 $("btnUseThumb").addEventListener("click", ()=>{
-  if(editing && editing.videoId){ editing.cover={type:"thumb", value:thumbUrl(editing.videoId,false)}; renderCoverPrev(); }
+  if(editing && editing.videoId) setCover("thumb", thumbUrl(editing.videoId));
 });
 $("btnPasteImgUrl").addEventListener("click", ()=>{
   const url = prompt("画像のURLを貼り付けてください");
   if(!url) return;
   const u = url.trim();
   if(!/^https?:\/\//i.test(u)){ toast("http(s)から始まるURLを入れてください"); return; }
-  editing.cover = { type:"image", value:u };
-  renderCoverPrev();
+  setCover("image", u);
   toast("画像を設定しました");
 });
 $("btnJacket").addEventListener("click", async ()=>{
@@ -752,7 +794,8 @@ $("btnJacket").addEventListener("click", async ()=>{
   btn.disabled=true; btn.textContent="探し中…";
   const j = await fetchJacket(song, artist);
   btn.disabled=false; btn.textContent=old;
-  if(j && j.artwork){ editing.cover={type:"itunes", value:j.artwork}; renderCoverPrev(); toast("ジャケットを設定しました"); }
+  if(!editing) return; // 探している間にシートが閉じられた
+  if(j && j.artwork){ setCover("itunes", j.artwork); toast("ジャケットを設定しました"); }
   else toast("ジャケットが見つかりませんでした");
 });
 
@@ -774,7 +817,7 @@ $("btnEditFromDetail").addEventListener("click", ()=>{
   const it=items.find(x=>x.id===detailId); if(!it) return;
   editing=JSON.parse(JSON.stringify(it));
   closeOv($("ovDetail"));
-  openEditSheet("編集", false);
+  openEditSheet("編集");
 });
 $("btnDelete").addEventListener("click", ()=>{
   if(!detailId) return;
@@ -791,7 +834,11 @@ $("fileImport").addEventListener("change", e=>{ const f=e.target.files[0]; if(f)
 
 // オーバーレイ背景タップで閉じる（シート以外）
 document.querySelectorAll(".overlay").forEach(ov=>{
-  ov.addEventListener("click", e=>{ if(e.target===ov) closeOv(ov); });
+  ov.addEventListener("click", e=>{
+    if(e.target!==ov) return;
+    if(ov===$("ovEdit")){ fetchToken++; editing=null; }
+    closeOv(ov);
+  });
 });
 
 setupCropDrag();
