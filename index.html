@@ -698,11 +698,24 @@ function doCrop(){
 }
 
 /* ====================== 設定・入出力 ====================== */
-function exportData(){
-  const blob=new Blob([JSON.stringify(items,null,2)],{type:"application/json"});
+async function exportData(){
+  const filename = "musiclog-backup-"+new Date().toISOString().slice(0,10)+".json";
+  const blob = new Blob([JSON.stringify(items,null,2)],{type:"application/json"});
+  // iOSのホーム画面アプリ(standalone)ではダウンロードリンクがそのまま保存につながらないことがあるため、
+  // 共有シート経由でファイル保存できる場合はそちらを優先する
+  try{
+    const file = new File([blob], filename, {type:"application/json"});
+    if(navigator.canShare && navigator.canShare({files:[file]})){
+      await navigator.share({files:[file], title:filename});
+      return;
+    }
+  }catch(e){
+    if(e && e.name==="AbortError") return; // 共有シートをキャンセルしただけ
+    // それ以外の失敗（非対応など）は下のダウンロード方式にフォールバック
+  }
   const a=document.createElement("a");
   a.href=URL.createObjectURL(blob);
-  a.download="musiclog-backup-"+new Date().toISOString().slice(0,10)+".json";
+  a.download=filename;
   a.click();
   setTimeout(()=>URL.revokeObjectURL(a.href),1000);
 }
