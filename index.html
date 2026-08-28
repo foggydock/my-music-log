@@ -130,8 +130,10 @@
     position:fixed; left:50%; bottom:calc(env(safe-area-inset-bottom) + 24px); transform:translateX(-50%) translateY(20px);
     background:#2a2a3a; color:#fff; padding:11px 18px; border-radius:12px; font-size:14px; z-index:200;
     opacity:0; transition:.25s; pointer-events:none; border:1px solid var(--line);
+    display:flex; align-items:center; gap:12px;
   }
-  #toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
+  #toast.show{opacity:1; transform:translateX(-50%) translateY(0); pointer-events:auto;}
+  #toast .undo{background:none; border:none; color:var(--accent2); font-weight:700; font-size:14px; cursor:pointer; padding:0; white-space:nowrap;}
   .count{font-size:12px; color:var(--sub); margin:0 0 12px 2px;}
 
   /* ツールバー（検索・並び替え・お気に入り絞り込み） */
@@ -305,7 +307,22 @@ let items = loadItems();
 
 /* ====================== ユーティリティ ====================== */
 const $ = id => document.getElementById(id);
-function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove("show"),1900); }
+function toast(msg, opts){
+  const t=$("toast");
+  t.innerHTML = "";
+  const span=document.createElement("span"); span.textContent=msg; span.style.flex="1";
+  t.appendChild(span);
+  if(opts && opts.actionLabel && opts.onAction){
+    const b=document.createElement("button");
+    b.className="undo"; b.textContent=opts.actionLabel;
+    b.addEventListener("click", ()=>{ clearTimeout(t._t); t.classList.remove("show"); opts.onAction(); });
+    t.appendChild(b);
+  }
+  t.classList.add("show");
+  clearTimeout(t._t);
+  const duration = (opts && opts.actionLabel) ? 5000 : 1900;
+  t._t=setTimeout(()=>t.classList.remove("show"), duration);
+}
 function esc(s){ return (s||"").replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 // カバー画像URLを要素の style に直接あてる（プレビュー・詳細用）
 function applyCoverBg(el, cov){
@@ -835,8 +852,17 @@ $("btnEditFromDetail").addEventListener("click", ()=>{
 $("btnDelete").addEventListener("click", ()=>{
   if(!detailId) return;
   if(!confirm("この曲を削除しますか？")) return;
-  items=items.filter(x=>x.id!==detailId);
-  saveItems(items); render(); closeOv($("ovDetail")); toast("削除しました");
+  const idx = items.findIndex(x=>x.id===detailId);
+  if(idx<0) return;
+  const removed = items[idx];
+  items = items.filter(x=>x.id!==detailId);
+  if(!saveItems(items)){ items.splice(idx,0,removed); return; }
+  render(); closeOv($("ovDetail"));
+  toast("削除しました", { actionLabel:"元に戻す", onAction:()=>{
+    items.splice(idx,0,removed);
+    saveItems(items); render();
+    toast("元に戻しました");
+  }});
 });
 
 $("btnSettings").addEventListener("click", ()=>{ $("fKey").value=getKey(); openOv($("ovSettings")); });
