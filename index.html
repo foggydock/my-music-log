@@ -361,15 +361,22 @@ function thumbUrl(id){ return `https://i.ytimg.com/vi/${id}/hqdefault.jpg`; }
 function watchUrl(id){ return `https://music.youtube.com/watch?v=${id}`; }
 
 /* ====================== 外部取得 ====================== */
-// noembed（CORS対応）でタイトル・チャンネル名を取得。失敗時は null。
-async function fetchOEmbed(id){
-  const url = "https://noembed.com/embed?url=" + encodeURIComponent("https://www.youtube.com/watch?v=" + id);
+// タイトル・チャンネル名を取得。noembedがダウン/遮断されている場合に備え、
+// YouTube公式oEmbedにもフォールバックする（両方失敗時のみ null）。
+async function fetchOEmbedFrom(url){
   try{
     const r = await fetch(url);
+    if(!r.ok) return null;
     const j = await r.json();
     if(j && j.title) return { title:j.title, author:j.author_name||"" };
   }catch(e){}
   return null;
+}
+async function fetchOEmbed(id){
+  const watch = "https://www.youtube.com/watch?v=" + id;
+  const viaNoembed = await fetchOEmbedFrom("https://noembed.com/embed?url=" + encodeURIComponent(watch));
+  if(viaNoembed) return viaNoembed;
+  return await fetchOEmbedFrom("https://www.youtube.com/oembed?format=json&url=" + encodeURIComponent(watch));
 }
 
 // iTunes 検索（JSONP方式でCORSを回避）。曲名＋歌手から正方形ジャケットを探す。
@@ -494,6 +501,14 @@ async function runFetch(){
     if(oe){
       if(oe.title){  rawTitle=oe.title;  if(!$("fSong").value.trim())   $("fSong").value=oe.title; }
       if(oe.author){ author=oe.author;   if(!$("fArtist").value.trim()) $("fArtist").value=oe.author; }
+    }
+
+    if(!oe && !rawTitle){
+      // 動画タイトルが全く取れないと、Geminiに渡す材料が無く曲名も歌手も特定できない。
+      // Gemini自体の失敗ではないので原因を区別して案内する。
+      setEditStatus("⚠ 動画タイトルの取得に失敗しました（通信環境やYouTube側の問題の可能性）。曲名・歌手を手入力してから「もう一度取得」を押すと背景だけでも取得できます。", true);
+      await tryAutoJacket();
+      return;
     }
 
     if(!getKey()){
