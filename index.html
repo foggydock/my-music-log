@@ -758,7 +758,7 @@ function importData(file){
     try{ arr=JSON.parse(r.result); }
     catch(e){ toast("ファイルを読み込めませんでした（JSONとして壊れています）"); return; }
     // このアプリの書き出し形式（{videoId, songTitle, ...} の配列）かどうかを確認してから置き換える
-    if(!Array.isArray(arr) || !arr.every(x=>x && typeof x==="object" && typeof x.videoId==="string")){
+    if(!Array.isArray(arr) || !arr.every(x=>x && typeof x==="object" && (typeof x.videoId==="string" || x.videoId===null))){
       toast("このアプリの書き出しファイルではないようです");
       return;
     }
