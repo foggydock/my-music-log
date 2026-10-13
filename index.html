@@ -377,7 +377,7 @@ function toast(msg, opts){
   t.classList.add("show");
   clearTimeout(t._t);
   // 長い警告文は読み切れるよう長めに出す
-  const duration = hasAction ? 5000 : Math.min(6000, Math.max(1900, msg.length*70));
+  const duration = hasAction ? (opts.duration||5000) : Math.min(6000, Math.max(1900, msg.length*70));
   t._t=setTimeout(()=>t.classList.remove("show"), duration);
 }
 function esc(s){ return (s==null ? "" : String(s)).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
@@ -913,6 +913,7 @@ function importData(file){
     }
     if(!confirm("読み込むと現在の "+items.length+" 曲を、ファイルの "+arr.length+" 曲で置き換えます。よろしいですか？")) return;
     const prevItems = items;
+    const prevExport = getTime(LS_LAST_EXPORT), prevSnooze = getTime(LS_BACKUP_SNOOZE);
     items = normalizeItems(arr);
     if(!saveItems(items)){
       items = prevItems; // 保存できなかったので置き換えを取り消す
@@ -921,8 +922,17 @@ function importData(file){
     }
     markExported(); // 読み込んだファイル自体がバックアップなので、催促はここから数え直す
     render();
-    toast("読み込みました");
     closeOv($("ovSettings"));
+    // 全置き換えなので、間違ったファイルを選んだ時にすぐ戻せるようにする（バックアップ催促の状態も元に戻す）
+    toast("読み込みました（"+items.length+"曲）", { actionLabel:"元に戻す", duration:8000, onAction:()=>{
+      const imported = items;
+      items = prevItems;
+      if(!saveItems(items)){ items = imported; return; } // 戻せなければ読み込み後のまま
+      if(prevExport) setTime(LS_LAST_EXPORT, prevExport); else try{ localStorage.removeItem(LS_LAST_EXPORT); }catch(e){}
+      if(prevSnooze) setTime(LS_BACKUP_SNOOZE, prevSnooze);
+      render(); renderLastExport();
+      toast("読み込み前の状態（"+items.length+"曲）に戻しました");
+    }});
   };
   r.readAsText(file);
 }
