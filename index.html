@@ -492,7 +492,7 @@ async function fetchJacket(song, artist){
 async function askGemini(rawTitle, author){
   const key = getKey();
   if(!key) throw new Error("NO_KEY");
-  const ep = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(key)}`;
+  const ep = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`; // キーはURLに載せず、ヘッダーで渡す（履歴やログに残りにくい）
   const prompt =
 `あなたは音楽に詳しいアシスタントです。あるYouTube Musicの動画について、次の情報が与えられます。
 - 動画タイトル: ${rawTitle || "(不明)"}
@@ -517,7 +517,7 @@ async function askGemini(rawTitle, author){
       }
     }
   };
-  const r = await fetch(ep,{ method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body) });
+  const r = await fetch(ep,{ method:"POST", headers:{"Content-Type":"application/json","x-goog-api-key":key}, body:JSON.stringify(body) });
   if(!r.ok){
     let detail=""; try{ const e=await r.json(); detail=e.error&&e.error.message||""; }catch(_){}
     if(r.status===400 && /API key/i.test(detail)) throw new Error("BAD_KEY");
