@@ -103,6 +103,15 @@
   .coveredit{display:flex; gap:12px; align-items:center; margin-bottom:4px;}
   .coveredit .prev{width:84px; height:84px; border-radius:14px; background:#000 center/cover no-repeat; flex-shrink:0; border:1px solid var(--line);}
   .coveredit .ctrls{flex:1;}
+  .coveredit .ctrls .btn{width:100%; font-size:13px; padding:10px;}
+  .coveredit .ctrls .btn + .btn{margin-top:8px;}
+
+  /* バックアップの催促 */
+  .backupbar{display:flex; align-items:center; gap:10px; background:#1f1a2e; border:1px solid #3a2f5a; border-radius:14px;
+    padding:10px 8px 10px 12px; margin:-6px 0 16px; font-size:13px; line-height:1.5;}
+  .backupbar span{flex:1; min-width:0;}
+  .backupbar .btn{padding:8px 12px; font-size:13px;}
+  .backupbar .later{background:none; border:none; color:var(--sub); font-size:18px; line-height:1; cursor:pointer; padding:6px;}
 
   /* 詳細 */
   .detail-cover{position:relative; width:100%; aspect-ratio:1/1; border-radius:18px; background:#000 center/cover no-repeat; margin-bottom:16px; border:1px solid var(--line);}
@@ -131,8 +140,11 @@
     background:#2a2a3a; color:#fff; padding:11px 18px; border-radius:12px; font-size:14px; z-index:200;
     opacity:0; transition:.25s; pointer-events:none; border:1px solid var(--line);
     display:flex; align-items:center; gap:12px;
+    width:max-content; max-width:calc(100vw - 32px); line-height:1.5;
   }
-  #toast.show{opacity:1; transform:translateX(-50%) translateY(0); pointer-events:auto;}
+  #toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
+  /* 「元に戻す」付きのときだけ押せるようにする（それ以外は下の保存ボタン等のタップを横取りしない） */
+  #toast.show.has-action{pointer-events:auto;}
   #toast .undo{background:none; border:none; color:var(--accent2); font-weight:700; font-size:14px; cursor:pointer; padding:0; white-space:nowrap;}
   .count{font-size:12px; color:var(--sub); margin:0 0 12px 2px;}
 
@@ -167,6 +179,11 @@
     <button class="btn ghost" id="btnPaste" title="貼り付け" style="padding:13px 13px;">📋</button>
     <button class="btn" id="btnFetch">調べる</button>
   </div>
+  <div class="backupbar" id="backupBar" style="display:none">
+    <span id="backupMsg"></span>
+    <button class="btn" id="btnBackupNow">書き出す</button>
+    <button class="later" id="btnBackupLater" title="あとで" aria-label="あとで">×</button>
+  </div>
   <div class="toolbar" id="toolbar" style="display:none">
     <input id="searchInput" class="search" type="search" placeholder="🔍 曲名・歌手で検索">
     <select id="sortSel" class="sortsel" aria-label="並び替え">
@@ -195,10 +212,10 @@
     <div class="coveredit">
       <div class="prev" id="prevCover"></div>
       <div class="ctrls">
-        <button class="btn ghost" id="btnJacket" style="width:100%; font-size:13px; padding:10px;">🎵 ジャケットを探す</button>
-        <button class="btn ghost" id="btnPickImg" style="width:100%; font-size:13px; padding:10px; margin-top:8px;">📷 スクショから選ぶ</button>
-        <button class="btn ghost" id="btnUseThumb" style="width:100%; font-size:13px; padding:10px; margin-top:8px;">↩ 動画サムネに戻す</button>
-        <button class="btn ghost" id="btnPasteImgUrl" style="width:100%; font-size:13px; padding:10px; margin-top:8px;">🔗 画像URLを貼る</button>
+        <button class="btn ghost" id="btnJacket">🎵 ジャケットを探す</button>
+        <button class="btn ghost" id="btnPickImg">📷 スクショから選ぶ</button>
+        <button class="btn ghost" id="btnUseThumb">↩ 動画サムネに戻す</button>
+        <button class="btn ghost" id="btnPasteImgUrl">🔗 画像URLを貼る</button>
       </div>
     </div>
     <input type="file" id="fileImg" accept="image/*" style="display:none">
@@ -228,7 +245,7 @@
     <div class="artist" id="dArtist"></div>
     <div class="bg" id="dBg"></div>
     <a class="btn openlink" id="dOpen" target="_blank" rel="noopener">▶ YouTube Musicで開く</a>
-    <div class="urlrow">
+    <div class="urlrow" id="dUrlRow">
       <span class="urltext" id="dUrl"></span>
       <button class="btn ghost" id="btnCopyUrl" style="flex:none; padding:8px 12px; font-size:12px;">📋 コピー</button>
     </div>
@@ -274,6 +291,7 @@
       <button class="btn ghost" id="btnExport">JSON書き出し</button>
       <button class="btn ghost" id="btnImport">読み込み</button>
     </div>
+    <p class="hint" id="lastExportInfo"></p>
     <input type="file" id="fileImport" accept="application/json,.json" style="display:none">
     <div class="row">
       <button class="btn" id="btnSaveSettings" style="flex:1;">閉じる</button>
@@ -288,9 +306,37 @@
 /* ====================== ストレージ ====================== */
 const LS_ITEMS = "musiclog.items.v1";
 const LS_KEY   = "musiclog.geminiKey.v1";
+const LS_LAST_EXPORT   = "musiclog.lastExport.v1";   // 最後にバックアップを書き出した（または読み込んだ）時刻
+const LS_BACKUP_SNOOZE = "musiclog.backupSnooze.v1"; // バックアップの催促を「あとで」にした期限
 const GEMINI_MODEL = "gemini-2.5-flash";
+const DAY = 86400000;
+const BACKUP_REMIND_DAYS = 14; // 書き出していない曲がこの日数たまったら催促する
+const BACKUP_SNOOZE_DAYS = 7;  // 「あとで」で催促を休む日数
 
-function loadItems(){ try{ return JSON.parse(localStorage.getItem(LS_ITEMS)) || []; }catch(e){ return []; } }
+function loadItems(){
+  let arr;
+  try{ arr = JSON.parse(localStorage.getItem(LS_ITEMS)); }catch(e){ arr = null; }
+  return Array.isArray(arr) ? normalizeItems(arr) : [];
+}
+// 保存データ・読み込みファイルの各曲を、表示や削除で不具合が出ない形にそろえる。
+// 曲名やメモの中身は変えず、型の崩れ（数値の曲名・文字列の日付など）と、id の欠け・重複だけを直す。
+function normalizeItems(arr){
+  const seen = new Set();
+  return arr.filter(x=>x && typeof x==="object").map(x=>{
+    const it = {...x};
+    for(const k of ["songTitle","artist","background","url"]){
+      if(it[k]!=null && typeof it[k]!=="string") it[k] = String(it[k]);
+    }
+    if(it.videoId!=null && typeof it.videoId!=="string") it.videoId = null;
+    if(typeof it.createdAt==="string") it.createdAt = Date.parse(it.createdAt) || 0;
+    else if(it.createdAt!=null && !Number.isFinite(it.createdAt)) it.createdAt = 0;
+    // id が無い曲は開けず、同じ id の曲は1曲消すと両方消えるため振り直す
+    let id = (typeof it.id==="string" || typeof it.id==="number") ? String(it.id) : "";
+    while(!id || seen.has(id)) id = uid();
+    seen.add(id); it.id = id;
+    return it;
+  });
+}
 function saveItems(items){
   try{
     localStorage.setItem(LS_ITEMS, JSON.stringify(items));
@@ -301,7 +347,15 @@ function saveItems(items){
   }
 }
 function getKey(){ return localStorage.getItem(LS_KEY) || ""; }
-function setKey(k){ localStorage.setItem(LS_KEY, k); }
+// 設定シートの入力欄のキーを保存する（容量がいっぱいで保存できなければ false）
+function saveKeyFromForm(){
+  const k = $("fKey").value.trim();
+  if(k===getKey()) return true;
+  try{ localStorage.setItem(LS_KEY, k); return true; }
+  catch(e){ toast("⚠ APIキーを保存できませんでした（保存容量がいっぱいの可能性）"); return false; }
+}
+function getTime(key){ const v = Number(localStorage.getItem(key)); return v>0 ? v : 0; }
+function setTime(key, t){ try{ localStorage.setItem(key, String(t)); }catch(e){} }
 
 let items = loadItems();
 
@@ -309,21 +363,35 @@ let items = loadItems();
 const $ = id => document.getElementById(id);
 function toast(msg, opts){
   const t=$("toast");
+  const hasAction = !!(opts && opts.actionLabel && opts.onAction);
   t.innerHTML = "";
   const span=document.createElement("span"); span.textContent=msg; span.style.flex="1";
   t.appendChild(span);
-  if(opts && opts.actionLabel && opts.onAction){
+  if(hasAction){
     const b=document.createElement("button");
     b.className="undo"; b.textContent=opts.actionLabel;
     b.addEventListener("click", ()=>{ clearTimeout(t._t); t.classList.remove("show"); opts.onAction(); });
     t.appendChild(b);
   }
+  t.classList.toggle("has-action", hasAction);
   t.classList.add("show");
   clearTimeout(t._t);
-  const duration = (opts && opts.actionLabel) ? 5000 : 1900;
+  // 長い警告文は読み切れるよう長めに出す
+  const duration = hasAction ? 5000 : Math.min(6000, Math.max(1900, msg.length*70));
   t._t=setTimeout(()=>t.classList.remove("show"), duration);
 }
-function esc(s){ return (s||"").replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function esc(s){ return (s==null ? "" : String(s)).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function findItem(id){ return items.find(x=>x.id===id); }
+// "2026-10-13" 形式（端末の時刻で。toISOString は世界標準時なので朝9時前だと前日の日付になる）
+function localDateStr(t){
+  const d=new Date(t), p=n=>String(n).padStart(2,"0");
+  return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate());
+}
+function daysAgoText(t){
+  const day0 = x=>{ const d=new Date(x); d.setHours(0,0,0,0); return d.getTime(); };
+  const n = Math.round((day0(Date.now())-day0(t))/DAY);
+  return n<=0 ? "今日" : n===1 ? "昨日" : n+"日前";
+}
 // カバー画像URLを要素の style に直接あてる（プレビュー・詳細用）
 function applyCoverBg(el, cov){
   const u = cov && cov.value;
@@ -344,21 +412,27 @@ function isYouTubeHost(h){
   h = (h||"").toLowerCase();
   return h==="youtube.com" || h.endsWith(".youtube.com") || h==="youtu.be" || h.endsWith(".youtu.be");
 }
-function extractVideoId(url){
-  if(!url) return null;
-  url = url.trim();
+function extractVideoId(text){
+  if(!text) return null;
+  text = text.trim();
+  // まずURLとして解釈し、取れなければ（https:// が無い・共有の文章が混ざっている等）文中から探す
   try{
-    const u = new URL(url);
-    if(!isYouTubeHost(u.hostname)) return null;
-    if(u.hostname.endsWith("youtu.be")) return u.pathname.slice(1).split(/[/?#]/)[0] || null;
-    const v = u.searchParams.get("v");
-    return (v && /^[\w-]{11}$/.test(v)) ? v : null;
+    const u = new URL(text);
+    if(isYouTubeHost(u.hostname)){
+      const id = u.hostname.endsWith("youtu.be") ? u.pathname.split("/")[1] : u.searchParams.get("v");
+      if(id && /^[\w-]{11}$/.test(id)) return id;
+    }
   }catch(e){}
-  const m = url.match(/(?:youtube\.com\/watch\?[^#]*[?&]v=|youtu\.be\/)([\w-]{11})/);
+  const m = text.match(/(?:youtube\.com\/watch\?(?:[^#\s]*&)?v=|youtu\.be\/)([\w-]{11})(?![\w-])/);
   return m ? m[1] : null;
 }
 function thumbUrl(id){ return `https://i.ytimg.com/vi/${id}/hqdefault.jpg`; }
 function watchUrl(id){ return `https://music.youtube.com/watch?v=${id}`; }
+// 詳細の「開く」リンク先。http(s) 以外（読み込んだファイルの javascript: 等）は開かせない
+function itemLinkUrl(it){
+  const u = it.url || (it.videoId ? watchUrl(it.videoId) : "");
+  return /^https?:\/\//i.test(u) ? u : "";
+}
 
 /* ====================== 外部取得 ====================== */
 // タイトル・チャンネル名を取得。noembedがダウン/遮断されている場合に備え、
@@ -401,7 +475,7 @@ function pickBestTrack(results, song){
       || results.find(r => { const n=(r.trackName||"").toLowerCase(); return n.includes(q)||q.includes(n); })
       || null;
 }
-// 曲名＋歌手から { artwork } を返す。見つからなければ null。
+// 曲名＋歌手から正方形ジャケットの画像URLを返す。見つからなければ null。
 async function fetchJacket(song, artist){
   const term = ((artist? artist+" ":"") + (song||"")).trim();
   if(!term) return null;
@@ -409,10 +483,9 @@ async function fetchJacket(song, artist){
   if(!data || !data.results || !data.results.length) return null;
   const r = pickBestTrack(data.results, song);
   if(!r) return null;
-  let art = r.artworkUrl100 || r.artworkUrl60 || "";
+  const art = r.artworkUrl100 || r.artworkUrl60 || "";
   if(!art) return null;
-  art = art.replace(/\/\d+x\d+bb\.(jpg|png)$/i, "/600x600bb.$1"); // 高解像度に差し替え
-  return { artwork:art };
+  return art.replace(/\/\d+x\d+bb\.(jpg|png)$/i, "/600x600bb.$1"); // 高解像度に差し替え
 }
 
 // Gemini で曲名・歌手・背景を整える
@@ -459,10 +532,17 @@ async function askGemini(rawTitle, author){
 /* ====================== 編集状態 ====================== */
 let editing = null; // 編集中の作業オブジェクト
 let fetchToken = 0; // 編集シートを閉じた後に古いfetchが結果を上書きしないようにする
+let activeFetch = 0; // いちばん新しく始まった runFetch の番号（ボタンを元に戻すのはその取得だけ）
 
-function newDraftFromFetch(id, song, artist, bg){
-  return { id:null, videoId:id, url:watchUrl(id), songTitle:song||"", artist:artist||"", background:bg||"",
+function newDraft(id){
+  return { id:null, videoId:id, url:watchUrl(id), songTitle:"", artist:"", background:"",
            cover:{ type:"thumb", value:thumbUrl(id) }, createdAt:null };
+}
+// 編集シートを閉じる（取得中の結果は捨てる）
+function closeEditSheet(){
+  fetchToken++;
+  closeOv($("ovEdit"));
+  editing = null;
 }
 
 async function startFetch(){
@@ -478,7 +558,7 @@ async function startFetch(){
   }
 
   // まずカバーと下書きを用意して編集シートを開く（取得は後追いで埋める）
-  editing = newDraftFromFetch(id, "", "", "");
+  editing = newDraft(id);
   openEditSheet("曲の情報");
   await runFetch();
 }
@@ -487,6 +567,7 @@ async function startFetch(){
 async function runFetch(){
   if(!editing || !editing.videoId){ return; }
   const myToken = ++fetchToken; // このfetch実行中に編集シートが閉じられたり別の曲に切り替わったりしたら結果を捨てる
+  activeFetch = myToken;
   const btnF=$("btnFetch"), btnR=$("btnRetry");
   btnF.disabled=true; btnF.textContent="調べ中…";
   btnR.disabled=true;
@@ -528,24 +609,30 @@ async function runFetch(){
         else setEditStatus("⚠ 取得に失敗しました（"+err.message+"）。「もう一度取得」で再試行できます。", true);
       }
     }
-    if(myToken!==fetchToken) return;
     await tryAutoJacket();
   }finally{
-    // btnFetch は編集シートの外（追加バー）にあるボタンなので、途中でキャンセル/保存されても必ず元に戻す
-    btnF.disabled=false; btnF.textContent="調べる";
-    btnR.disabled=false;
+    // btnFetch は編集シートの外（追加バー）にあるボタンなので、途中でキャンセル/保存されても必ず元に戻す。
+    // ただし後から別の取得が始まっていたら、そちらが終わるまで押せないままにする（多重実行を防ぐ）
+    if(activeFetch===myToken){
+      btnF.disabled=false; btnF.textContent="調べる";
+      btnR.disabled=false;
+    }
   }
 }
 
-// 曲名・歌手から正方形ジャケットを自動セット（ユーザーが切り抜いた画像があれば尊重して上書きしない）
+// 自分で選んだ画像（切り抜き・画像URL）はジャケットの自動取得で上書きしない
+function hasUserCover(d){ return !!(d.cover && d.cover.type==="image"); }
+
+// 曲名・歌手から正方形ジャケットを自動セット
 async function tryAutoJacket(){
-  if(!editing) return;
-  if(editing.cover && editing.cover.type==="image") return;
+  const target = editing;
+  if(!target || hasUserCover(target)) return;
   const song=$("fSong").value.trim(), artist=$("fArtist").value.trim();
   if(!song) return;
-  const j = await fetchJacket(song, artist);
-  if(!editing) return; // 取得中にシートが閉じられた
-  if(j && j.artwork) setCover("itunes", j.artwork);
+  const art = await fetchJacket(song, artist);
+  // 探している間にシートが閉じられた／別の曲の編集に変わった／自分で画像を選んだ場合は何もしない
+  if(editing!==target || hasUserCover(target)) return;
+  if(art) setCover("itunes", art);
 }
 
 function setEditStatus(msg, isErr, loading){
@@ -561,6 +648,7 @@ function openEditSheet(title){
   $("fArtist").value = editing.artist || "";
   $("fBg").value     = editing.background || "";
   $("btnRetry").style.display = editing.videoId ? "block" : "none";
+  $("btnUseThumb").style.display = editing.videoId ? "" : "none"; // YouTube以外のリンクの曲には動画サムネが無い
   setEditStatus("", false);
   openOv($("ovEdit"));
 }
@@ -583,12 +671,13 @@ function saveEdit(){
   editing.background = $("fBg").value.trim();
 
   const prevItems = items.slice(); // 保存に失敗したら元に戻すためのスナップショット
-  if(editing.id){
-    const i = items.findIndex(x=>x.id===editing.id);
-    if(i>=0) items[i] = editing;
+  const i = editing.id ? items.findIndex(x=>x.id===editing.id) : -1;
+  if(i>=0){
+    items[i] = editing;
   }else{
-    editing.id = uid();
-    editing.createdAt = Date.now();
+    // 新しい曲。保存に一度失敗した後の再保存や、編集中に別のタブで消されていた場合も、ここで追加し直す
+    if(!editing.id) editing.id = uid();
+    if(!editing.createdAt) editing.createdAt = Date.now();
     items.unshift(editing);
   }
   if(!saveItems(items)){
@@ -597,11 +686,9 @@ function saveEdit(){
     return;
   }
   render();
-  fetchToken++;
-  closeOv($("ovEdit"));
+  closeEditSheet();
   $("urlInput").value="";
   toast("保存しました ♪");
-  editing=null;
 }
 
 /* ====================== 表示 ====================== */
@@ -627,6 +714,7 @@ function visibleItems(){
 }
 
 function render(){
+  renderBackupBar();
   const grid=$("grid"), empty=$("empty"), toolbar=$("toolbar");
   if(items.length===0){ grid.innerHTML=""; empty.style.display="block"; toolbar.style.display="none"; $("count").textContent=""; return; }
   empty.style.display="none";
@@ -645,8 +733,34 @@ function render(){
   }).join("");
 }
 
+// 端末の故障・機種変更・ホーム画面アプリの削除で記録が消えないよう、
+// 書き出していない曲が BACKUP_REMIND_DAYS 日以上たまっていたら一覧の上で書き出しを勧める
+function renderBackupBar(){
+  const now=Date.now(), last=getTime(LS_LAST_EXPORT);
+  const pending = items.filter(x=>(x.createdAt||0)>last);
+  const oldest = Math.min(...pending.map(x=>x.createdAt));
+  const show = pending.length>0 && now-oldest>=BACKUP_REMIND_DAYS*DAY && now>=getTime(LS_BACKUP_SNOOZE);
+  $("backupBar").style.display = show ? "flex" : "none";
+  if(show){
+    $("backupMsg").textContent = "💾 バックアップしていない曲が "+pending.length+" 曲あります（"
+      + (last ? "前回の書き出し: "+daysAgoText(last) : "まだ一度も書き出していません") + "）";
+  }
+}
+function renderLastExport(){
+  const last=getTime(LS_LAST_EXPORT);
+  $("lastExportInfo").textContent = last
+    ? "前回の書き出し: "+localDateStr(last)+"（"+daysAgoText(last)+"）"
+    : "まだ一度も書き出していません。端末の故障や機種変更、ホーム画面のアプリ削除で記録が消えるので、ときどき書き出してください。";
+}
+function markExported(){
+  setTime(LS_LAST_EXPORT, Date.now());
+  try{ localStorage.removeItem(LS_BACKUP_SNOOZE); }catch(e){}
+  renderBackupBar();
+  renderLastExport();
+}
+
 function toggleFav(id){
-  const it = items.find(x=>x.id===id); if(!it) return;
+  const it = findItem(id); if(!it) return;
   it.fav = !it.fav;
   if(!saveItems(items)){ it.fav = !it.fav; return; } // 保存できなければ画面上も元に戻す
   render();
@@ -655,14 +769,18 @@ function toggleFav(id){
 
 let detailId=null;
 function openDetail(id){
-  const it=items.find(x=>x.id===id); if(!it) return;
+  const it=findItem(id); if(!it) return;
   detailId=id;
   applyCoverBg($("dCover"), it.cover);
   $("dSong").textContent = it.songTitle || "(無題)";
   $("dArtist").textContent = it.artist || "";
   $("dBg").textContent = it.background || "（背景メモはまだありません）";
-  const durl = it.url || watchUrl(it.videoId);
-  $("dOpen").href = durl;
+  // YouTube以外のリンクの曲もあるので、ボタンの文言を分け、開けるURLが無ければ隠す
+  const durl = itemLinkUrl(it);
+  $("dOpen").href = durl || "#";
+  $("dOpen").textContent = it.videoId ? "▶ YouTube Musicで開く" : "▶ リンクを開く";
+  $("dOpen").style.display = durl ? "" : "none";
+  $("dUrlRow").style.display = durl ? "" : "none";
   $("dUrl").textContent = durl;
   $("dFav").classList.toggle("on", !!it.fav);
   openOv($("ovDetail"));
@@ -672,6 +790,8 @@ function openDetail(id){
 let cropState=null;
 function openCrop(dataUrl){
   const img=$("cropImg");
+  cropState=null; // 読み込みが終わるまでは切り抜かせない（前の画像の枠のまま切り抜かないように）
+  $("btnCropOk").disabled=true;
   openOv($("ovCrop")); // 先に表示してから寸法を測る（非表示のままだと clientWidth が 0 になり枠が潰れる）
   img.onload=()=>{
     const wrap=$("cropwrap");
@@ -679,7 +799,9 @@ function openCrop(dataUrl){
     const side=Math.min(w,h)*0.8;
     cropState={ w, h, side, x:(w-side)/2, y:(h-side)/2 };
     applyBox();
+    $("btnCropOk").disabled=false;
   };
+  img.onerror=()=>{ closeOv($("ovCrop")); toast("この画像は読み込めませんでした"); };
   img.src=dataUrl;
 }
 function applyBox(){
@@ -696,6 +818,7 @@ function setupCropDrag(){
   const box=$("cropbox"), handle=$("cropHandle");
   let mode=null, start=null, orig=null;
   function down(m){ return e=>{
+    if(!cropState) return;
     e.preventDefault(); mode=m; start={x:e.clientX,y:e.clientY}; orig={...cropState};
     if(box.setPointerCapture) box.setPointerCapture(e.pointerId);
   }; }
@@ -717,6 +840,7 @@ function setupCropDrag(){
 
 function doCrop(){
   const img=$("cropImg"), s=cropState;
+  if(!s) return;
   const scale = img.naturalWidth / s.w; // 表示→実ピクセル
   const sx=s.x*scale, sy=s.y*scale, ss=s.side*scale;
   const out=500;
@@ -731,7 +855,7 @@ function doCrop(){
 
 /* ====================== 設定・入出力 ====================== */
 async function exportData(){
-  const filename = "musiclog-backup-"+new Date().toISOString().slice(0,10)+".json";
+  const filename = "musiclog-backup-"+localDateStr(Date.now())+".json";
   const blob = new Blob([JSON.stringify(items,null,2)],{type:"application/json"});
   // iOSのホーム画面アプリ(standalone)ではダウンロードリンクがそのまま保存につながらないことがあるため、
   // 共有シート経由でファイル保存できる場合はそちらを優先する
@@ -739,6 +863,7 @@ async function exportData(){
     const file = new File([blob], filename, {type:"application/json"});
     if(navigator.canShare && navigator.canShare({files:[file]})){
       await navigator.share({files:[file], title:filename});
+      markExported();
       return;
     }
   }catch(e){
@@ -750,6 +875,7 @@ async function exportData(){
   a.download=filename;
   a.click();
   setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+  markExported();
 }
 function importData(file){
   const r=new FileReader();
@@ -764,12 +890,13 @@ function importData(file){
     }
     if(!confirm("読み込むと現在の "+items.length+" 曲を、ファイルの "+arr.length+" 曲で置き換えます。よろしいですか？")) return;
     const prevItems = items;
-    items = arr;
+    items = normalizeItems(arr);
     if(!saveItems(items)){
       items = prevItems; // 保存できなかったので置き換えを取り消す
       render();
       return;
     }
+    markExported(); // 読み込んだファイル自体がバックアップなので、催促はここから数え直す
     render();
     toast("読み込みました");
     closeOv($("ovSettings"));
@@ -783,7 +910,7 @@ $("urlInput").addEventListener("keydown", e=>{ if(e.key==="Enter") startFetch();
 
 $("grid").addEventListener("click", e=>{
   const fb=e.target.closest(".favbtn");
-  if(fb){ e.stopPropagation(); toggleFav(fb.dataset.fav); return; }
+  if(fb){ toggleFav(fb.dataset.fav); return; }
   const c=e.target.closest(".cardx"); if(c) openDetail(c.dataset.id);
 });
 
@@ -798,7 +925,7 @@ $("sortSel").addEventListener("change", e=>{ sortMode=e.target.value; render(); 
 $("favToggle").addEventListener("click", ()=>{ favOnly=!favOnly; $("favToggle").classList.toggle("on", favOnly); render(); });
 
 // 詳細のお気に入りトグル
-$("dFav").addEventListener("click", e=>{ e.stopPropagation(); if(detailId) toggleFav(detailId); });
+$("dFav").addEventListener("click", ()=>{ if(detailId) toggleFav(detailId); });
 
 // URLペースト
 $("btnPaste").addEventListener("click", async ()=>{
@@ -809,7 +936,7 @@ $("btnPaste").addEventListener("click", async ()=>{
   }catch(e){ toast("貼り付けできません。長押しでペーストしてください"); }
 });
 
-$("btnCancelEdit").addEventListener("click", ()=>{ fetchToken++; closeOv($("ovEdit")); editing=null; });
+$("btnCancelEdit").addEventListener("click", closeEditSheet);
 $("btnSave").addEventListener("click", saveEdit);
 $("btnRetry").addEventListener("click", runFetch);
 
@@ -835,12 +962,13 @@ $("btnPasteImgUrl").addEventListener("click", ()=>{
 $("btnJacket").addEventListener("click", async ()=>{
   const song=$("fSong").value.trim(), artist=$("fArtist").value.trim();
   if(!song){ toast("先に曲名を入れてください"); return; }
+  const target=editing;
   const btn=$("btnJacket"), old=btn.textContent;
   btn.disabled=true; btn.textContent="探し中…";
-  const j = await fetchJacket(song, artist);
+  const art = await fetchJacket(song, artist);
   btn.disabled=false; btn.textContent=old;
-  if(!editing) return; // 探している間にシートが閉じられた
-  if(j && j.artwork){ setCover("itunes", j.artwork); toast("ジャケットを設定しました"); }
+  if(!target || editing!==target) return; // 探している間にシートが閉じられた／別の曲の編集に変わった
+  if(art){ setCover("itunes", art); toast("ジャケットを設定しました"); }
   else toast("ジャケットが見つかりませんでした");
 });
 
@@ -859,7 +987,7 @@ $("btnCopyUrl").addEventListener("click", async ()=>{
 });
 $("btnCloseDetail").addEventListener("click", ()=> closeOv($("ovDetail")));
 $("btnEditFromDetail").addEventListener("click", ()=>{
-  const it=items.find(x=>x.id===detailId); if(!it) return;
+  const it=findItem(detailId); if(!it) return;
   editing=JSON.parse(JSON.stringify(it));
   closeOv($("ovDetail"));
   openEditSheet("編集");
@@ -870,29 +998,56 @@ $("btnDelete").addEventListener("click", ()=>{
   const idx = items.findIndex(x=>x.id===detailId);
   if(idx<0) return;
   const removed = items[idx];
-  items = items.filter(x=>x.id!==detailId);
+  items.splice(idx,1); // id で絞り込むと、同じ id の曲が他にあった場合まとめて消えるので位置で消す
   if(!saveItems(items)){ items.splice(idx,0,removed); return; }
   render(); closeOv($("ovDetail"));
   toast("削除しました", { actionLabel:"元に戻す", onAction:()=>{
-    items.splice(idx,0,removed);
-    saveItems(items); render();
+    if(findItem(removed.id)) return; // すでに戻っている（別のタブで戻した等）
+    const at = Math.min(idx, items.length);
+    items.splice(at,0,removed);
+    // 保存できなければ戻した表示も取り消す（saveItems が出した警告をそのまま見せる）
+    if(!saveItems(items)){ items.splice(at,1); return; }
+    render();
     toast("元に戻しました");
   }});
 });
 
-$("btnSettings").addEventListener("click", ()=>{ $("fKey").value=getKey(); openOv($("ovSettings")); });
-$("btnSaveSettings").addEventListener("click", ()=>{ setKey($("fKey").value.trim()); closeOv($("ovSettings")); });
+$("btnSettings").addEventListener("click", ()=>{ $("fKey").value=getKey(); renderLastExport(); openOv($("ovSettings")); });
+$("btnSaveSettings").addEventListener("click", ()=>{ if(saveKeyFromForm()) closeOv($("ovSettings")); });
 $("btnExport").addEventListener("click", exportData);
 $("btnImport").addEventListener("click", ()=> $("fileImport").click());
 $("fileImport").addEventListener("change", e=>{ const f=e.target.files[0]; if(f) importData(f); e.target.value=""; });
 
-// オーバーレイ背景タップで閉じる（シート以外）
+$("btnBackupNow").addEventListener("click", exportData);
+$("btnBackupLater").addEventListener("click", ()=>{
+  setTime(LS_BACKUP_SNOOZE, Date.now()+BACKUP_SNOOZE_DAYS*DAY);
+  renderBackupBar();
+  toast(BACKUP_SNOOZE_DAYS+"日後にまたお知らせします");
+});
+
+// オーバーレイ背景タップで閉じる（シート以外）。
+// 押し始めも背景だったときだけ閉じる（入力欄から外へなぞって文字を選んだ時や、切り抜き枠を外まで動かした時に閉じて入力が消えないように）
 document.querySelectorAll(".overlay").forEach(ov=>{
+  let downOnBg=false;
+  ov.addEventListener("pointerdown", e=>{ downOnBg = (e.target===ov); }, true);
   ov.addEventListener("click", e=>{
-    if(e.target!==ov) return;
-    if(ov===$("ovEdit")){ fetchToken++; editing=null; }
+    if(e.target!==ov || !downOnBg) return;
+    downOnBg=false;
+    if(ov===$("ovEdit")){ closeEditSheet(); return; }
+    if(ov===$("ovSettings") && !saveKeyFromForm()) return; // 「閉じる」と同じく入力したキーを保存する
     closeOv(ov);
   });
+});
+
+// PCで2つのタブに開いている等で、別のタブが保存したら読み直す（古い一覧のまま保存して相手の追加・削除を消さないように）
+window.addEventListener("storage", e=>{
+  if(e.key===LS_LAST_EXPORT || e.key===LS_BACKUP_SNOOZE){ renderBackupBar(); return; }
+  if(e.key!==LS_ITEMS && e.key!==null) return;
+  items = loadItems();
+  render();
+  if($("ovDetail").classList.contains("open")){
+    if(findItem(detailId)) openDetail(detailId); else closeOv($("ovDetail"));
+  }
 });
 
 setupCropDrag();
