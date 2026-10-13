@@ -292,6 +292,7 @@
       <button class="btn ghost" id="btnImport">読み込み</button>
     </div>
     <p class="hint" id="lastExportInfo"></p>
+    <p class="hint" id="storageInfo"></p>
     <input type="file" id="fileImport" accept="application/json,.json" style="display:none">
     <div class="row">
       <button class="btn" id="btnSaveSettings" style="flex:1;">閉じる</button>
@@ -775,6 +776,19 @@ function renderLastExport(){
     ? "前回の書き出し: "+localDateStr(last)+"（"+daysAgoText(last)+"）"
     : "まだ一度も書き出していません。端末の故障や機種変更、ホーム画面のアプリ削除で記録が消えるので、ときどき書き出してください。";
 }
+// この端末の保存容量（localStorage）の使用量。上限はブラウザごとに違うが、おおむね文字数で500万字
+const STORAGE_LIMIT_CHARS = 5000000;
+function renderStorageInfo(){
+  const el=$("storageInfo");
+  let used=0;
+  try{ for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); used += k.length + (localStorage.getItem(k)||"").length; } }
+  catch(e){ el.textContent=""; return; }
+  const pct = Math.min(100, Math.round(used/STORAGE_LIMIT_CHARS*100));
+  const imgs = items.filter(x=>x.cover && typeof x.cover.value==="string" && x.cover.value.startsWith("data:")).length;
+  el.textContent = "保存容量: 約"+pct+"% 使用中（"+items.length+"曲、うち切り抜き画像"+imgs+"枚）。上限はブラウザごとに異なる目安です。"
+    + (pct>=80 ? "もうすぐいっぱいです。書き出してバックアップし、不要な曲や切り抜き画像を減らしてください。" : "");
+  el.style.color = pct>=80 ? "#ff8497" : "";
+}
 function markExported(){
   setTime(LS_LAST_EXPORT, Date.now());
   try{ localStorage.removeItem(LS_BACKUP_SNOOZE); }catch(e){}
@@ -1045,7 +1059,7 @@ $("btnDelete").addEventListener("click", ()=>{
   }});
 });
 
-$("btnSettings").addEventListener("click", ()=>{ $("fKey").value=getKey(); renderLastExport(); openOv($("ovSettings")); });
+$("btnSettings").addEventListener("click", ()=>{ $("fKey").value=getKey(); renderLastExport(); renderStorageInfo(); openOv($("ovSettings")); });
 $("btnSaveSettings").addEventListener("click", ()=>{ if(saveKeyFromForm()) closeOv($("ovSettings")); });
 $("btnExport").addEventListener("click", exportData);
 $("btnImport").addEventListener("click", ()=> $("fileImport").click());
