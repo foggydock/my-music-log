@@ -454,19 +454,17 @@ async function fetchOEmbed(id){
   return await fetchOEmbedFrom("https://www.youtube.com/oembed?format=json&url=" + encodeURIComponent(watch));
 }
 
-// iTunes 検索（JSONP方式でCORSを回避）。曲名＋歌手から正方形ジャケットを探す。
-function itunesSearch(term){
-  return new Promise(resolve=>{
-    const cb = "__it_" + Math.random().toString(36).slice(2);
-    const s = document.createElement("script");
-    const timer = setTimeout(()=>{ cleanup(); resolve(null); }, 8000);
-    function cleanup(){ clearTimeout(timer); window[cb]=function(){}; if(s.parentNode) s.parentNode.removeChild(s); }
-    window[cb] = data => { cleanup(); resolve(data); };
-    const p = new URLSearchParams({ term, entity:"song", limit:"6", country:"JP", callback:cb });
-    s.src = "https://itunes.apple.com/search?" + p.toString();
-    s.onerror = ()=>{ cleanup(); resolve(null); };
-    document.head.appendChild(s);
-  });
+// iTunes 検索。曲名＋歌手から正方形ジャケットを探す。失敗・8秒でタイムアウトしたら null。
+async function itunesSearch(term){
+  const ctrl = new AbortController();
+  const timer = setTimeout(()=>ctrl.abort(), 8000);
+  try{
+    const p = new URLSearchParams({ term, entity:"song", limit:"6", country:"JP" });
+    const r = await fetch("https://itunes.apple.com/search?" + p.toString(), { signal: ctrl.signal });
+    if(!r.ok) return null;
+    return await r.json();
+  }catch(e){ return null; }
+  finally{ clearTimeout(timer); }
 }
 // タイトルが曲名と一致・部分一致するものだけを候補にする。無関係な1件目を誤爆させないため results[0] にはフォールバックしない。
 function pickBestTrack(results, song){
