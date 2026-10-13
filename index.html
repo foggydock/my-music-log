@@ -533,6 +533,9 @@ async function askGemini(rawTitle, author){
 let editing = null; // 編集中の作業オブジェクト
 let fetchToken = 0; // 編集シートを閉じた後に古いfetchが結果を上書きしないようにする
 let activeFetch = 0; // いちばん新しく始まった runFetch の番号（ボタンを元に戻すのはその取得だけ）
+// 編集シートを開いた時点（＋自動取得で埋めた分）の内容。今の内容がこれと違えば、自分で書き換えた未保存の変更がある
+let editBase = null;
+const EDIT_FIELDS = ["fSong","fArtist","fBg"];
 
 function newDraft(id){
   return { id:null, videoId:id, url:watchUrl(id), songTitle:"", artist:"", background:"",
@@ -543,6 +546,22 @@ function closeEditSheet(){
   fetchToken++;
   closeOv($("ovEdit"));
   editing = null;
+  editBase = null;
+}
+function coverKey(c){ return c ? c.type+"|"+c.value : ""; }
+function isEditDirty(){
+  if(!editing || !editBase) return false;
+  return EDIT_FIELDS.some(id=>$(id).value.trim()!==editBase[id].trim()) || coverKey(editing.cover)!==editBase.cover;
+}
+// キャンセル・背景タップで閉じる。自分で書き換えた内容があれば確認してから捨てる
+function requestCloseEdit(){
+  if(isEditDirty() && !confirm("保存していない変更があります。破棄して閉じますか？")) return;
+  closeEditSheet();
+}
+// 自動取得で欄を埋める（自分で書き換えたものではないので、未保存の変更には数えない）
+function fillField(id, v){
+  $(id).value = v;
+  if(editBase) editBase[id] = $(id).value;
 }
 
 async function startFetch(){
@@ -580,8 +599,8 @@ async function runFetch(){
     const oe = await fetchOEmbed(editing.videoId);
     if(myToken!==fetchToken) return;
     if(oe){
-      if(oe.title){  rawTitle=oe.title;  if(!$("fSong").value.trim())   $("fSong").value=oe.title; }
-      if(oe.author){ author=oe.author;   if(!$("fArtist").value.trim()) $("fArtist").value=oe.author; }
+      if(oe.title){  rawTitle=oe.title;  if(!$("fSong").value.trim())   fillField("fSong", oe.title); }
+      if(oe.author){ author=oe.author;   if(!$("fArtist").value.trim()) fillField("fArtist", oe.author); }
     }
 
     if(!oe && !rawTitle){
@@ -598,9 +617,9 @@ async function runFetch(){
       try{
         const g = await askGemini(rawTitle, author);
         if(myToken!==fetchToken) return;
-        if(g.songTitle) $("fSong").value = g.songTitle;
-        if(g.artist) $("fArtist").value = g.artist;
-        if(g.background) $("fBg").value = g.background;
+        if(g.songTitle) fillField("fSong", g.songTitle);
+        if(g.artist) fillField("fArtist", g.artist);
+        if(g.background) fillField("fBg", g.background);
         setEditStatus("取得しました。内容を確認して保存してください。", false);
       }catch(err){
         if(myToken!==fetchToken) return;
@@ -632,7 +651,7 @@ async function tryAutoJacket(){
   const art = await fetchJacket(song, artist);
   // 探している間にシートが閉じられた／別の曲の編集に変わった／自分で画像を選んだ場合は何もしない
   if(editing!==target || hasUserCover(target)) return;
-  if(art) setCover("itunes", art);
+  if(art) setCover("itunes", art, true);
 }
 
 function setEditStatus(msg, isErr, loading){
@@ -650,16 +669,20 @@ function openEditSheet(title){
   $("btnRetry").style.display = editing.videoId ? "block" : "none";
   $("btnUseThumb").style.display = editing.videoId ? "" : "none"; // YouTube以外のリンクの曲には動画サムネが無い
   setEditStatus("", false);
+  editBase = { cover: coverKey(editing.cover) };
+  EDIT_FIELDS.forEach(id=>{ editBase[id] = $(id).value; });
   openOv($("ovEdit"));
 }
 
 function renderCoverPrev(){
   applyCoverBg($("prevCover"), editing.cover);
 }
-// editing が編集シートを閉じた後で null になっていることがある（非同期のジャケット取得中など）ので安全側でno-op
-function setCover(type, value){
+// editing が編集シートを閉じた後で null になっていることがある（非同期のジャケット取得中など）ので安全側でno-op。
+// auto=true は自動取得でのセット（未保存の変更には数えない）
+function setCover(type, value, auto){
   if(!editing) return;
   editing.cover = { type, value };
+  if(auto && editBase) editBase.cover = coverKey(editing.cover);
   renderCoverPrev();
 }
 
@@ -936,7 +959,7 @@ $("btnPaste").addEventListener("click", async ()=>{
   }catch(e){ toast("貼り付けできません。長押しでペーストしてください"); }
 });
 
-$("btnCancelEdit").addEventListener("click", closeEditSheet);
+$("btnCancelEdit").addEventListener("click", requestCloseEdit);
 $("btnSave").addEventListener("click", saveEdit);
 $("btnRetry").addEventListener("click", runFetch);
 
@@ -1033,7 +1056,7 @@ document.querySelectorAll(".overlay").forEach(ov=>{
   ov.addEventListener("click", e=>{
     if(e.target!==ov || !downOnBg) return;
     downOnBg=false;
-    if(ov===$("ovEdit")){ closeEditSheet(); return; }
+    if(ov===$("ovEdit")){ requestCloseEdit(); return; }
     if(ov===$("ovSettings") && !saveKeyFromForm()) return; // 「閉じる」と同じく入力したキーを保存する
     closeOv(ov);
   });
